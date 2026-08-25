@@ -1,0 +1,22 @@
+# ESP-IDF build outputs
+build/
+**/build/
+managed_components/
+**/managed_components/
+sdkconfig.old
+**/sdkconfig.old
+*.bin
+*.elf
+*.map
+*.ninja
+.ninja*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# System / OS
+.DS_Store
+Thumbs.db
