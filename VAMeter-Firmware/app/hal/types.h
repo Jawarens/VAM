@@ -120,6 +120,12 @@ namespace CONFIG
         std::string wifiSsid;
         std::string wifiPassword;
         std::string startupImage;
+
+        // Recorder / Logging settings
+        uint32_t recordTime = 10000;        // Total recording window (ms)
+        uint32_t sampleIntervalMs = 200;    // Sample interval (ms)
+        int triggerMode = 0;                // 0: manual, 1: V above, 2: V under, 3: A above, 4: A under
+        float threshold = 1.0f;             // Trigger threshold
     };
 
 #define PASS_STARTUP_IMAGE_TAG "__pass"

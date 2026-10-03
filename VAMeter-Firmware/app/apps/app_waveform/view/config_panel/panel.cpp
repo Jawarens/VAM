@@ -23,24 +23,30 @@ static constexpr int _panel_w = 240;
 static constexpr int _panel_h = 240;
 static constexpr int _panel_r = 16;
 
-static ConfigPanel::Config_t* _config_storage = nullptr;
+void ConfigPanel::syncToSystemConfig()
+{
+    HAL::GetSystemConfig().recordTime = _data.config.record_time;
+    HAL::GetSystemConfig().sampleIntervalMs = _data.config.sample_interval_ms;
+    HAL::GetSystemConfig().triggerMode = static_cast<int>(_data.config.trigger_mode);
+    HAL::GetSystemConfig().threshold = _data.config.threshold;
+    HAL::SaveSystemConfig();
+}
 
 ConfigPanel::~ConfigPanel()
 {
     if (_data.selector != nullptr)
         delete _data.selector;
 
-    // Store config
-    if (_config_storage == nullptr)
-        _config_storage = new Config_t;
-    std::memcpy(_config_storage, &_data.config, sizeof(Config_t));
+    syncToSystemConfig();
 }
 
 void ConfigPanel::onInit()
 {
-    // Restore storage
-    if (_config_storage != nullptr)
-        std::memcpy(&_data.config, _config_storage, sizeof(Config_t));
+    // Always restore from persistent SystemConfig (retains settings across power cycle & menu changes)
+    _data.config.record_time = HAL::GetSystemConfig().recordTime;
+    _data.config.sample_interval_ms = HAL::GetSystemConfig().sampleIntervalMs;
+    _data.config.trigger_mode = static_cast<TriggerMode_t>(HAL::GetSystemConfig().triggerMode);
+    _data.config.threshold = HAL::GetSystemConfig().threshold;
 
     setRenderOnUpdate(false);
 
@@ -65,6 +71,7 @@ void ConfigPanel::hide()
 {
     SmoothWidgetBase::hide();
     _data.selector->hide();
+    syncToSystemConfig();
 }
 
 void ConfigPanel::onPopOut()
@@ -80,6 +87,8 @@ void ConfigPanel::onPopOut()
 void ConfigPanel::onHide()
 {
     constexpr int delay = 200;
+
+    syncToSystemConfig();
 
     getTransition().jumpTo(_panel_x, _panel_y, _panel_w, _panel_h);
     getTransition().moveTo(_panel_startup_x, _panel_startup_y, _panel_startup_w, _panel_startup_h);

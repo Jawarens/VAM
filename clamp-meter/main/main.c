@@ -35,6 +35,7 @@
 #include "esp_timer.h"
 #include "esp_spiffs.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -1057,6 +1058,56 @@ static void show_toast(const char *msg, uint32_t duration_ms)
     g_meter.notification_until_ms = (esp_timer_get_time() / 1000) + duration_ms;
 }
 
+static void load_settings_nvs(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("clamp_meter", NVS_READONLY, &handle);
+    if (err == ESP_OK) {
+        uint32_t val32 = 0;
+        size_t len = sizeof(float);
+        float zero_offset = 0;
+        if (nvs_get_blob(handle, "zero_v", &zero_offset, &len) == ESP_OK) {
+            if (zero_offset > 0.5f && zero_offset < 4.5f) {
+                g_meter.zero_offset_V = zero_offset;
+                ESP_LOGI(TAG, "Loaded zero_offset_V from NVS: %.3f V", zero_offset);
+            }
+        }
+        if (nvs_get_u32(handle, "interval_s", &val32) == ESP_OK) {
+            if (val32 >= 1 && val32 <= 3600) {
+                g_meter.log_interval_s = val32;
+                ESP_LOGI(TAG, "Loaded log_interval_s from NVS: %lu s", val32);
+            }
+        }
+        uint8_t vol = 0;
+        if (nvs_get_u8(handle, "volume", &vol) == ESP_OK) {
+            if (vol < BEEP_VOL_MAX) {
+                g_meter.beep_volume = (BeepVolume_t)vol;
+                ESP_LOGI(TAG, "Loaded beep_volume from NVS: %u", vol);
+            }
+        }
+        nvs_close(handle);
+    } else {
+        ESP_LOGI(TAG, "No saved NVS settings found, using defaults");
+    }
+}
+
+static void save_settings_nvs(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("clamp_meter", NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        nvs_set_blob(handle, "zero_v", &g_meter.zero_offset_V, sizeof(float));
+        nvs_set_u32(handle, "interval_s", g_meter.log_interval_s);
+        nvs_set_u8(handle, "volume", (uint8_t)g_meter.beep_volume);
+        nvs_commit(handle);
+        nvs_close(handle);
+        ESP_LOGI(TAG, "Saved settings to NVS: zero=%.3fV, interval=%lus, vol=%u",
+                 g_meter.zero_offset_V, g_meter.log_interval_s, g_meter.beep_volume);
+    } else {
+        ESP_LOGW(TAG, "Failed to open NVS for writing: %s", esp_err_to_name(err));
+    }
+}
+
 static void execute_menu_action(MenuItem_t item)
 {
     switch (item) {
@@ -1067,6 +1118,7 @@ static void execute_menu_action(MenuItem_t item)
         g_meter.peak_A = 0.0f;
         g_meter.min_A = 0.0f;
         g_meter.in_menu = false;
+        save_settings_nvs();
         buzzer_confirm();
         show_toast("ZERO CALIBRATED!", 2000);
         ESP_LOGI(TAG, "Zero offset calibrated to %.3f V", sen_v);
@@ -1084,10 +1136,12 @@ static void execute_menu_action(MenuItem_t item)
         else if (g_meter.log_interval_s == 5) g_meter.log_interval_s = 1;
         else if (g_meter.log_interval_s == 1) g_meter.log_interval_s = 30;
         else g_meter.log_interval_s = 10;
+        save_settings_nvs();
         buzzer_click();
         break;
     case MENU_ITEM_VOLUME:
         g_meter.beep_volume = (BeepVolume_t)((g_meter.beep_volume + 1) % BEEP_VOL_MAX);
+        save_settings_nvs();
         buzzer_confirm();
         break;
     case MENU_ITEM_WIFI_SERVER:
@@ -1274,6 +1328,8 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    load_settings_nvs();
 
     g_mutex = xSemaphoreCreateMutex();
 

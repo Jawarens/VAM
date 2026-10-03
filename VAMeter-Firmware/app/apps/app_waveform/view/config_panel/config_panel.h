@@ -50,6 +50,7 @@ public:
     void onUpdate() override;
 
     inline const Config_t& getConfig() { return _data.config; }
+    void syncToSystemConfig();
 };
 
 class ConfigReacordTime : public SmoothUIToolKit::Widgets::Selector::SmoothOption

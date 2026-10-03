@@ -30,6 +30,7 @@ void AppSettings::_on_page_root()
         options.push_back(AssetPool::GetText().AppSettings_Option_Display);
         options.push_back(AssetPool::GetText().AppSettings_Option_Buzzer);
         options.push_back(AssetPool::GetText().AppSettings_Option_Encoder);
+        options.push_back("Recorder");
         options.push_back(AssetPool::GetText().AppSettings_Option_Calibration);
         options.push_back(AssetPool::GetText().AppSettings_Option_Network);
         options.push_back(AssetPool::GetText().AppSettings_Option_OTA);
@@ -63,24 +64,27 @@ void AppSettings::_on_page_root()
             _on_page_encoder();
 
         else if (selected_index == 5)
-            _on_page_calibration();
+            _on_page_recorder();
 
         else if (selected_index == 6)
-            _on_page_network();
+            _on_page_calibration();
 
         else if (selected_index == 7)
-            _on_page_ota_upgrade();
+            _on_page_network();
 
         else if (selected_index == 8)
-            _on_page_language();
+            _on_page_ota_upgrade();
 
         else if (selected_index == 9)
-            _on_page_startup_image();
+            _on_page_language();
 
         else if (selected_index == 10)
-            _on_page_base_test();
+            _on_page_startup_image();
 
         else if (selected_index == 11)
+            _on_page_base_test();
+
+        else if (selected_index == 12)
             _on_factory_reset();
     }
 

@@ -83,69 +83,40 @@ void ConfigReacordTime::onRender()
     AssetPool::LoadFont24(HAL::GetCanvas());
     HAL::GetCanvas()->setTextDatum(middle_center);
 
-    std::string string_buffer;
-    if (_config->record_time >= 60 * 1000)
-    {
-        string_buffer = std::to_string(_config->record_time / 1000 / 60);
-        string_buffer += " min";
-    }
-    else
-    {
-        string_buffer = std::to_string(_config->record_time / 1000);
-        string_buffer += " s";
-    }
-
+    std::string string_buffer = std::to_string(_config->record_time / 1000) + " s";
     HAL::GetCanvas()->drawString(string_buffer.c_str(), frame.x + 174, frame.y + frame.h / 2);
 }
 
-static constexpr uint32_t _rec_time_step = 1000;
-static constexpr uint32_t _rec_time_max  = 120 * 60 * 1000; // extended: 120 min
-static constexpr uint32_t _rec_time_min  = 1000;
+static constexpr uint32_t _rec_time_max = 60 * 1000; // 60s max for internal SPI flash
+static constexpr uint32_t _rec_time_min = 1000;      // 1s min
 
 void ConfigReacordTime::onUpdate()
 {
     if (!isSelected())
         return;
 
-    // Record time config
+    // Record time config (1s steps up to 10s, 5s steps up to 60s)
     if (Encoder::WasMoved())
     {
         uint32_t new_rec_time = _config->record_time;
+        uint32_t step = (new_rec_time >= 10000) ? 5000 : 1000;
         if (Encoder::GetDirection() < 0)
         {
-            if (new_rec_time >= 60 * 1000)
-                new_rec_time += _rec_time_step * 60;
-            else
-                new_rec_time += _rec_time_step;
-
+            new_rec_time += step;
             if (new_rec_time > _rec_time_max)
                 new_rec_time = _rec_time_max;
         }
         else
         {
-            if (new_rec_time > 60 * 1000)
-                new_rec_time -= _rec_time_step * 60;
+            if (new_rec_time > step)
+                new_rec_time -= step;
             else
-                new_rec_time -= _rec_time_step;
+                new_rec_time = _rec_time_min;
 
             if (new_rec_time < _rec_time_min)
                 new_rec_time = _rec_time_min;
         }
         _config->record_time = new_rec_time;
-
-        // Auto-adjust sample interval:
-        //   < 1 min  → 200 ms  (fast, for short waveform captures)
-        //   1–5 min  → 1 000 ms
-        //   5–15 min → 5 000 ms
-        //   >= 15 min → 10 000 ms  (10 s, for long-duration logging)
-        if (new_rec_time < 60 * 1000)
-            _config->sample_interval_ms = 200;
-        else if (new_rec_time < 5 * 60 * 1000)
-            _config->sample_interval_ms = 1000;
-        else if (new_rec_time < 15 * 60 * 1000)
-            _config->sample_interval_ms = 5000;
-        else
-            _config->sample_interval_ms = 10000;
     }
 }
 

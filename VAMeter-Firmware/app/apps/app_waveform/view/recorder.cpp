@@ -343,9 +343,13 @@ void WaveFormRecorder::_render_rec_state_label()
 
         // Time
         int total_seconds = (HAL::Millis() - _data.recording_start_time_count) / 1000;
-        int minutes = total_seconds / 60;
+        int hours = total_seconds / 3600;
+        int minutes = (total_seconds % 3600) / 60;
         int seconds = total_seconds % 60;
-        Waveform::_get_string_buffer() = spdlog::fmt_lib::format("REC: {:02d}:{:02d}", minutes, seconds);
+        if (hours > 0)
+            Waveform::_get_string_buffer() = spdlog::fmt_lib::format("REC: {:02d}:{:02d}:{:02d}", hours, minutes, seconds);
+        else
+            Waveform::_get_string_buffer() = spdlog::fmt_lib::format("REC: {:02d}:{:02d}", minutes, seconds);
 
         // Panel
         auto panel_width = HAL::GetCanvas()->textWidth(Waveform::_get_string_buffer().c_str());
@@ -417,7 +421,10 @@ void WaveFormRecorder::_handle_start_recording()
     }
     }
 
-    // Apply config
+    // Apply config and sync to persistent system config
+    if (_data.config_panel != nullptr)
+        _data.config_panel->syncToSystemConfig();
+
     _data.trigger->setRecordTime(getConfig().record_time);
     _data.trigger->setThreshold(getConfig().threshold);
     _data.trigger->setSampleInterval(getConfig().sample_interval_ms); // extended logging rate

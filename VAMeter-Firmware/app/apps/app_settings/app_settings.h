@@ -30,6 +30,11 @@ namespace MOONCAKE
             void _on_page_refresh_rate();
             void _on_page_buzzer();
             void _on_page_encoder();
+            void _on_page_recorder();
+            void _on_page_recorder_time();
+            void _on_page_recorder_interval();
+            void _on_page_recorder_trigger_mode();
+            void _on_page_recorder_threshold();
             void _on_page_language();
             void _on_page_startup_image();
             void _on_page_calibration();

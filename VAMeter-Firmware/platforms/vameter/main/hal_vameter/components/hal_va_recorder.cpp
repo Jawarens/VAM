@@ -75,35 +75,32 @@ void _return_pm_data_daemon();
 // 选👴! OS 的神
 void _remove_temp_dir(const char* tempDirPath)
 {
-    spdlog::info("try remove {}", tempDirPath);
+    spdlog::info("try clean {}", tempDirPath);
 
     // Clear dir
     DIR* dir = opendir(tempDirPath);
     if (dir == NULL)
-        HAL::PopFatalError(_errno_open_temp_dir_failed);
+    {
+        // Directory does not exist yet; nothing to clean
+        return;
+    }
 
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL)
     {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0)
         {
-            char path[1024];
+            char path[64];
             snprintf(path, sizeof(path), "%s/%s", tempDirPath, entry->d_name);
-            if (remove(path) != 0)
-                HAL::PopFatalError(_errno_clear_temp_dir_failed);
+            remove(path);
         }
 
         esp_task_wdt_reset();
     }
 
     closedir(dir);
-    spdlog::info("dir clear");
-
-    // Remove dir
-    if (rmdir(tempDirPath) == -1)
-        HAL::PopFatalError(_errno_remove_temp_dir_failed);
-
-    spdlog::info("remove done");
+    rmdir(tempDirPath);
+    spdlog::info("clean done");
 }
 
 static void _va_recorder_daemon(void* param)
@@ -131,6 +128,14 @@ static void _va_recorder_daemon(void* param)
 
     // Get trigger and buffer
     VA_RECORDER::TriggerBase* trigger = daemon_status->Borrow().trigger;
+    daemon_status->Return();
+
+    // Save chunks every 5s (or 10s for 30s-60s sessions, resulting in at most 6 chunks)
+    if (trigger != nullptr && trigger->getRecordTime() >= 30000)
+        rec_chunk_save_interval = 10000;
+    else
+        rec_chunk_save_interval = 5000;
+
     VA_RECORDER::PreTriggerBuffer* pre_trigger_buffer = nullptr;
 
     if (daemon_status->GetRaw().trigger->preTriggerBufferSize() != 0)
@@ -145,18 +150,9 @@ static void _va_recorder_daemon(void* param)
     /* -------------------------------------------------------------------------- */
     /*                               State preparing                              */
     /* -------------------------------------------------------------------------- */
-    // Create temp folder
-    if (access(temp_folder_path, F_OK) == 0)
-    {
-        _remove_temp_dir(temp_folder_path);
-    }
-    if (mkdir(temp_folder_path, S_IRWXU) != 0)
-    {
-        daemon_status->Return();
-        HAL::PopFatalError(_errno_create_temp_dir_failed);
-    }
-
-    daemon_status->Return();
+    // Ensure clean temp folder
+    _remove_temp_dir(temp_folder_path);
+    mkdir(temp_folder_path, S_IRWXU);
 
     /* -------------------------------------------------------------------------- */
     /*                                State waiting                               */
@@ -188,8 +184,15 @@ static void _va_recorder_daemon(void* param)
         if (trigger->onCheck(pre_trigger_buffer))
             break;
 
-        esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(trigger->getSampleInterval()));
+        // Sliced delay to constantly feed watchdog even for long sample intervals
+        uint32_t interval_remaining = trigger->getSampleInterval();
+        while (interval_remaining > 0)
+        {
+            uint32_t chunk_delay = (interval_remaining > 200) ? 200 : interval_remaining;
+            vTaskDelay(pdMS_TO_TICKS(chunk_delay));
+            interval_remaining -= chunk_delay;
+            esp_task_wdt_reset();
+        }
 
         // Check kill signal
         is_going_to_hell = daemon_status->Borrow().goToHell;
@@ -251,8 +254,15 @@ static void _va_recorder_daemon(void* param)
             chunk_save_time_count = millis;
         }
 
-        esp_task_wdt_reset();
-        vTaskDelay(pdMS_TO_TICKS(trigger->getSampleInterval()));
+        // Sliced delay to constantly feed watchdog even for long sample intervals
+        uint32_t interval_remaining = trigger->getSampleInterval();
+        while (interval_remaining > 0)
+        {
+            uint32_t chunk_delay = (interval_remaining > 200) ? 200 : interval_remaining;
+            vTaskDelay(pdMS_TO_TICKS(chunk_delay));
+            interval_remaining -= chunk_delay;
+            esp_task_wdt_reset();
+        }
 
         // Check kill signal
         is_going_to_hell = daemon_status->Borrow().goToHell;
@@ -318,50 +328,39 @@ static void _va_recorder_daemon(void* param)
     }
 
     /* ------------------------------ Merge chunks ------------------------------ */
-    // Write all chunks into final file
-    for (int i = 1; i < rec_chunk_file_count + 1; i++)
+    // Stream chunks into final file efficiently using a fixed buffer (no heap exhaustion)
+    rec_final_file = fopen(daemon_status->Borrow().savePath, "a");
+    daemon_status->Return();
+    if (rec_final_file != NULL)
     {
-        snprintf(rec_chunk_file_path_buffer, sizeof(rec_chunk_file_path_buffer), "%s/%d.csv", temp_folder_path, i);
-        spdlog::info("try append {}", rec_chunk_file_path_buffer);
+        char stream_buf[1024];
+        for (int i = 1; i < rec_chunk_file_count + 1; i++)
+        {
+            snprintf(rec_chunk_file_path_buffer, sizeof(rec_chunk_file_path_buffer), "%s/%d.csv", temp_folder_path, i);
+            spdlog::info("try append {}", rec_chunk_file_path_buffer);
 
-        // Open chunk file
-        rec_chunk_file = fopen(rec_chunk_file_path_buffer, "rb");
-        if (rec_chunk_file == NULL)
-            HAL::PopFatalError(_errno_open_chunk_failed);
+            // Open chunk file
+            rec_chunk_file = fopen(rec_chunk_file_path_buffer, "rb");
+            if (rec_chunk_file != NULL)
+            {
+                size_t bytesRead;
+                while ((bytesRead = fread(stream_buf, 1, sizeof(stream_buf), rec_chunk_file)) > 0)
+                {
+                    fwrite(stream_buf, 1, bytesRead, rec_final_file);
+                    esp_task_wdt_reset();
+                }
 
-        // Get size and allocate
-        fseek(rec_chunk_file, 0, SEEK_END);
-        chunk_read_buffer_size = ftell(rec_chunk_file);
-        fseek(rec_chunk_file, 0, SEEK_SET);
+                fclose(rec_chunk_file);
+                rec_chunk_file = NULL;
+                remove(rec_chunk_file_path_buffer);
+            }
 
-        chunk_read_buffer = (char*)malloc(chunk_read_buffer_size * sizeof(char));
-        if (chunk_read_buffer == NULL)
-            HAL::PopFatalError(_errno_malloc_failed);
+            esp_task_wdt_reset();
+        }
 
-        // Copy buffer and close chunk
-        fread(chunk_read_buffer, sizeof(char), chunk_read_buffer_size, rec_chunk_file);
-        if (fclose(rec_chunk_file) == EOF)
-            HAL::PopFatalError(_errno_close_chunk_failed);
-        rec_chunk_file = NULL;
-
-        // Open final file
-        rec_final_file = fopen(daemon_status->Borrow().savePath, "a");
-        daemon_status->Return();
-        if (rec_final_file == NULL)
-            HAL::PopFatalError(_errno_open_rec_file_failed);
-
-        // Append buffer to the end
-        fwrite(chunk_read_buffer, sizeof(char), chunk_read_buffer_size, rec_final_file);
-
-        // Save and free
         if (fclose(rec_final_file) == EOF)
             HAL::PopFatalError(_errno_close_rec_file_failed);
         rec_final_file = NULL;
-
-        free(chunk_read_buffer);
-        chunk_read_buffer = NULL;
-
-        esp_task_wdt_reset();
     }
 
     /* ------------------------------- Remove temp ------------------------------ */
@@ -419,8 +418,8 @@ bool HAL_VAMeter::creatVaRecorder(VA_RECORDER::TriggerBase* trigger)
     _recorder_daemon_status->GetRaw().trigger = trigger;
     _recorder_daemon_status->GetRaw().current_offset = _config.currentOffset;
 
-    // Create daemon
-    xTaskCreate(_va_recorder_daemon, "rec", 4000, (void*)_recorder_daemon_status, 15, NULL);
+    // Create daemon with generous 8KB stack for FATFS + spdlog
+    xTaskCreate(_va_recorder_daemon, "rec", 8192, (void*)_recorder_daemon_status, 15, NULL);
     return true;
 }
 

@@ -41,6 +41,10 @@ void HAL_VAMeter::_log_out_system_config()
     spdlog::info(" - locale code: {}", (int)_config.localeCode);
     spdlog::info(" - currrnt offset: {:0.7f}", _config.currentOffset);
     spdlog::info(" - startup image: {}", _config.startupImage);
+    spdlog::info(" - record time: {} ms", _config.recordTime);
+    spdlog::info(" - sample interval: {} ms", _config.sampleIntervalMs);
+    spdlog::info(" - trigger mode: {}", _config.triggerMode);
+    spdlog::info(" - threshold: {:.3f}", _config.threshold);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -58,6 +62,15 @@ void HAL_VAMeter::_config_check_valid()
 
     if (_config.orientation > 3 || _config.orientation < 0)
         _config.orientation = 0;
+
+    if (_config.recordTime < 1000 || _config.recordTime > 60000)
+        _config.recordTime = 10000;
+
+    if (_config.sampleIntervalMs < 20 || _config.sampleIntervalMs > 5000)
+        _config.sampleIntervalMs = 200;
+
+    if (_config.triggerMode < 0 || _config.triggerMode >= 5)
+        _config.triggerMode = 0;
 }
 
 void HAL_VAMeter::loadSystemConfig()
@@ -80,7 +93,7 @@ void HAL_VAMeter::loadSystemConfig()
     fseek(config_file, 0, SEEK_END);
     file_length = ftell(config_file);
     fseek(config_file, 0, SEEK_SET);
-    file_content = (char*)malloc(file_length);
+    file_content = (char*)malloc(file_length + 1);
 
     // If shit happened
     if (!file_content)
@@ -102,19 +115,17 @@ void HAL_VAMeter::loadSystemConfig()
     else
     {
         fread(file_content, 1, file_length, config_file);
+        file_content[file_length] = '\0';
         fclose(config_file);
     }
 
     // Parse
     JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, file_content);
+    DeserializationError error = deserializeJson(doc, (const char*)file_content, (size_t)file_length);
     if (error != DeserializationError::Ok)
     {
         free(file_content);
-        // spdlog::error("json invaild");
-
-        _disp_init();
-        popWarning("Config JSON\nInvaild");
+        spdlog::warn("json invalid: {}, recovering config", error.c_str());
 
         saveSystemConfig();
         return;
@@ -130,6 +141,15 @@ void HAL_VAMeter::loadSystemConfig()
     _config.wifiSsid = doc["wifiSsid"].as<std::string>();
     _config.wifiPassword = doc["wifiPassword"].as<std::string>();
     _config.startupImage = doc["startupImage"].as<std::string>();
+
+    if (!doc["recordTime"].isNull())
+        _config.recordTime = doc["recordTime"].as<uint32_t>();
+    if (!doc["sampleIntervalMs"].isNull())
+        _config.sampleIntervalMs = doc["sampleIntervalMs"].as<uint32_t>();
+    if (!doc["triggerMode"].isNull())
+        _config.triggerMode = doc["triggerMode"].as<int>();
+    if (!doc["threshold"].isNull())
+        _config.threshold = doc["threshold"].as<float>();
 
     int locale_code = doc["localeCode"];
     if (locale_code <= (int)locale_code_jp && locale_code >= 0)
@@ -170,6 +190,10 @@ std::string HAL_VAMeter::_create_config_json()
     doc["wifiSsid"] = _config.wifiSsid;
     doc["wifiPassword"] = _config.wifiPassword;
     doc["startupImage"] = _config.startupImage;
+    doc["recordTime"] = _config.recordTime;
+    doc["sampleIntervalMs"] = _config.sampleIntervalMs;
+    doc["triggerMode"] = _config.triggerMode;
+    doc["threshold"] = _config.threshold;
 
     // Serialize
     std::string json_content;
@@ -202,8 +226,9 @@ void HAL_VAMeter::_backup_config_file()
     FILE* config_backup_file = fopen(_system_config_backup_path, "wb");
     if (config_backup_file == NULL)
     {
-        _disp_init();
-        popFatalError("Open config backup failed");
+        spdlog::warn("Open config backup failed, skipping backup");
+        fclose(config_file);
+        return;
     }
 
     // Copy and save
@@ -232,8 +257,8 @@ void HAL_VAMeter::saveSystemConfig()
     FILE* config_file = fopen(_system_config_path, "wb");
     if (config_file == NULL)
     {
-        _disp_init();
-        popFatalError("Open config failed");
+        spdlog::error("Open config failed");
+        return;
     }
 
     // Write and save
