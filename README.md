@@ -2,6 +2,12 @@
 
 A collection of telemetry and high-speed data logging firmware built with **ESP-IDF v6.1** for **M5Stack VAMeter** and **ESP32-C3-LCDKit** with Hall-effect current sensors.
 
+<p align="center">
+  <a href="https://ko-fi.com/F0T028FQJQ">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi" />
+  </a>
+</p>
+
 ---
 
 ## 📁 Repository Structure
@@ -66,6 +72,14 @@ idf.py set-target esp32c3
 idf.py build
 idf.py -p COM5 flash
 `
+
+---
+
+## ☕ Support the Project
+
+If this project saves you time or is helpful to your electronics projects, please consider supporting development!
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/F0T028FQJQ)
 
 ---
 
