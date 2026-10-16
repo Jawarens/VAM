@@ -14,8 +14,8 @@ A collection of telemetry and high-speed data logging firmware built with **ESP-
 
 `
 VAM/
-├── VAMeter-Firmware/       # M5Stack VAMeter High-Precision Meter Firmware (ESP-IDF v6.1)
-├── clamp-meter/            # ESP32-C3-LCDKit LEM HO-100-S Clamp Meter & Web Server
+├── m5stack-vameter/       # M5Stack VAMeter High-Precision Meter Firmware (ESP-IDF v6.1)
+├── feather-clampmeter/            # ESP32-C3-LCDKit LEM HO-100-S Clamp Meter & Web Server
 ├── download_logs.py        # Python script to download CSV telemetry logs over Wi-Fi
 ├── read_serial.py          # Python high-speed serial monitoring tool
 └── README.md
@@ -67,7 +67,7 @@ idf.py -p COM4 flash
 
 ### Building & Flashing ESP32-C3 Clamp Meter:
 `powershell
-cd clamp-meter
+cd feather-clampmeter
 idf.py set-target esp32c3
 idf.py build
 idf.py -p COM5 flash
