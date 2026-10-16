@@ -19,6 +19,14 @@ using namespace MOONCAKE::APPS;
 
 static std::string _format_record_time(uint32_t ms)
 {
+    if (ms >= 60000)
+    {
+        uint32_t mins = ms / 60000;
+        uint32_t rem_sec = (ms % 60000) / 1000;
+        if (rem_sec > 0)
+            return std::to_string(mins) + " m " + std::to_string(rem_sec) + " s";
+        return std::to_string(mins) + " min";
+    }
     return std::to_string(ms / 1000) + " s";
 }
 
@@ -113,14 +121,16 @@ void AppSettings::_on_page_recorder_time()
         uint32_t ms;
     };
 
-    static const TimeOption kTimeOptions[] = {
-        {"5 s", 5000},
+        static const TimeOption kTimeOptions[] = {
         {"10 s", 10000},
-        {"15 s", 15000},
-        {"20 s", 20000},
         {"30 s", 30000},
-        {"45 s", 45000},
-        {"60 s (Max)", 60000},
+        {"1 min", 60000},
+        {"5 min", 300000},
+        {"10 min", 600000},
+        {"15 min", 900000},
+        {"30 min", 1800000},
+        {"45 min", 2700000},
+        {"60 min (Max)", 3600000},
     };
     constexpr size_t num_options = sizeof(kTimeOptions) / sizeof(kTimeOptions[0]);
 

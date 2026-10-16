@@ -63,10 +63,10 @@ void HAL_VAMeter::_config_check_valid()
     if (_config.orientation > 3 || _config.orientation < 0)
         _config.orientation = 0;
 
-    if (_config.recordTime < 1000 || _config.recordTime > 60000)
+    if (_config.recordTime < 1000 || _config.recordTime > 3600000)
         _config.recordTime = 10000;
 
-    if (_config.sampleIntervalMs < 20 || _config.sampleIntervalMs > 5000)
+    if (_config.sampleIntervalMs < 20 || _config.sampleIntervalMs > 60000)
         _config.sampleIntervalMs = 200;
 
     if (_config.triggerMode < 0 || _config.triggerMode >= 5)

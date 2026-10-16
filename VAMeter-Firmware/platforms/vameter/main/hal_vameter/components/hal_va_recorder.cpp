@@ -130,11 +130,25 @@ static void _va_recorder_daemon(void* param)
     VA_RECORDER::TriggerBase* trigger = daemon_status->Borrow().trigger;
     daemon_status->Return();
 
-    // Save chunks every 5s (or 10s for 30s-60s sessions, resulting in at most 6 chunks)
-    if (trigger != nullptr && trigger->getRecordTime() >= 30000)
-        rec_chunk_save_interval = 10000;
+    // Adapt chunk save interval based on total record duration to maintain reasonable chunk file count
+    if (trigger != nullptr)
+    {
+        uint32_t total_rt = trigger->getRecordTime();
+        if (total_rt >= 30 * 60 * 1000)      // >= 30 min
+            rec_chunk_save_interval = 60000; // 60s chunks
+        else if (total_rt >= 10 * 60 * 1000) // >= 10 min
+            rec_chunk_save_interval = 30000; // 30s chunks
+        else if (total_rt >= 60 * 1000)      // >= 1 min
+            rec_chunk_save_interval = 15000; // 15s chunks
+        else if (total_rt >= 30 * 1000)      // >= 30 s
+            rec_chunk_save_interval = 10000; // 10s chunks
+        else
+            rec_chunk_save_interval = 5000;  // 5s chunks
+    }
     else
+    {
         rec_chunk_save_interval = 5000;
+    }
 
     VA_RECORDER::PreTriggerBuffer* pre_trigger_buffer = nullptr;
 

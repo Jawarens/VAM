@@ -37,8 +37,6 @@ void ConfigReacordTime::onPopOut()
 
     getTransition().jumpTo(_panel_startup_x, _panel_startup_y, _panel_startup_w, _panel_startup_h);
     getTransition().moveTo(_panel_x, _panel_y, _panel_w, _panel_h);
-    
-    // getTransition().setTransitionPath(SmoothUIToolKit::EasingPath::easeOutBack);
     getTransition().setDuration(400);
     getTransition().setEachDelay(delay + 0, delay + 50, delay + 50, delay + 0);
 }
@@ -49,8 +47,6 @@ void ConfigReacordTime::onHide()
 
     getTransition().jumpTo(_panel_x, _panel_y, _panel_w, _panel_h);
     getTransition().moveTo(_panel_startup_x, _panel_startup_y, _panel_startup_w, _panel_startup_h);
-
-    // getTransition().setTransitionPath(SmoothUIToolKit::EasingPath::easeOutBack);
     getTransition().setDuration(400);
     getTransition().setEachDelay(delay + 50, delay + 0, delay + 0, delay + 0);
 }
@@ -83,33 +79,53 @@ void ConfigReacordTime::onRender()
     AssetPool::LoadFont24(HAL::GetCanvas());
     HAL::GetCanvas()->setTextDatum(middle_center);
 
-    std::string string_buffer = std::to_string(_config->record_time / 1000) + " s";
+    std::string string_buffer;
+    if (_config->record_time >= 60 * 1000)
+    {
+        uint32_t mins = _config->record_time / (60 * 1000);
+        uint32_t rem_s = (_config->record_time % (60 * 1000)) / 1000;
+        if (rem_s > 0)
+            string_buffer = std::to_string(mins) + "m" + std::to_string(rem_s) + "s";
+        else
+            string_buffer = std::to_string(mins) + " min";
+    }
+    else
+    {
+        string_buffer = std::to_string(_config->record_time / 1000) + " s";
+    }
+
     HAL::GetCanvas()->drawString(string_buffer.c_str(), frame.x + 174, frame.y + frame.h / 2);
 }
 
-static constexpr uint32_t _rec_time_max = 60 * 1000; // 60s max for internal SPI flash
-static constexpr uint32_t _rec_time_min = 1000;      // 1s min
+// 60 minutes top, 10s intervals
+static constexpr uint32_t _rec_time_max = 60 * 60 * 1000; // 60 min max (3600000 ms)
+static constexpr uint32_t _rec_time_min = 10 * 1000;      // 10s min
+static constexpr uint32_t _rec_time_step = 10 * 1000;     // 10s step
 
 void ConfigReacordTime::onUpdate()
 {
     if (!isSelected())
         return;
 
-    // Record time config (1s steps up to 10s, 5s steps up to 60s)
+    // Record time config: 10s intervals up to 60 minutes max
     if (Encoder::WasMoved())
     {
         uint32_t new_rec_time = _config->record_time;
-        uint32_t step = (new_rec_time >= 10000) ? 5000 : 1000;
+
+        // Round to nearest 10s step
+        if (new_rec_time % _rec_time_step != 0)
+            new_rec_time = ((new_rec_time + _rec_time_step / 2) / _rec_time_step) * _rec_time_step;
+
         if (Encoder::GetDirection() < 0)
         {
-            new_rec_time += step;
+            new_rec_time += _rec_time_step;
             if (new_rec_time > _rec_time_max)
                 new_rec_time = _rec_time_max;
         }
         else
         {
-            if (new_rec_time > step)
-                new_rec_time -= step;
+            if (new_rec_time > _rec_time_step)
+                new_rec_time -= _rec_time_step;
             else
                 new_rec_time = _rec_time_min;
 
@@ -122,14 +138,8 @@ void ConfigReacordTime::onUpdate()
 
 void ConfigReacordTime::onSelect()
 {
-    // if (isHidden())
-    //     return;
-    // HAL::CanvasUpdate();
 }
 
 void ConfigReacordTime::onUnSelect()
 {
-    // if (isHidden())
-    //     return;
-    // HAL::CanvasUpdate();
 }
