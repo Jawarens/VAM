@@ -73,6 +73,47 @@ void HAL_VAMeter::_config_check_valid()
         _config.triggerMode = 0;
 }
 
+static void _load_config_from_nvs(CONFIG::SystemConfig_t& cfg, HAL_VAMeter* hal)
+{
+    int32_t rec_time = hal->nvsGet("cfg_rec_time");
+    if (rec_time >= 1000 && rec_time <= 3600000)
+    {
+        cfg.recordTime = rec_time;
+        spdlog::info("NVS restored recordTime: {} ms", rec_time);
+    }
+
+    int32_t interval = hal->nvsGet("cfg_interval");
+    if (interval >= 20 && interval <= 60000)
+    {
+        cfg.sampleIntervalMs = interval;
+        spdlog::info("NVS restored sampleIntervalMs: {} ms", interval);
+    }
+
+    int32_t trig_m = hal->nvsGet("cfg_trig_m");
+    if (trig_m >= 0 && trig_m < 5)
+    {
+        cfg.triggerMode = trig_m;
+    }
+
+    int32_t trig_th = hal->nvsGet("cfg_trig_th");
+    if (trig_th != 0)
+    {
+        cfg.threshold = (float)trig_th / 1000.0f;
+    }
+
+    int32_t bright = hal->nvsGet("cfg_bright");
+    if (bright > 0 && bright <= 255)
+    {
+        cfg.brightness = bright;
+    }
+
+    int32_t rot = hal->nvsGet("cfg_rot");
+    if (rot >= 0 && rot <= 3)
+    {
+        cfg.orientation = rot;
+    }
+}
+
 void HAL_VAMeter::loadSystemConfig()
 {
     spdlog::info("load config from fs");
@@ -158,6 +199,7 @@ void HAL_VAMeter::loadSystemConfig()
     free(file_content);
     spdlog::info("done");
 
+    _load_config_from_nvs(_config, this);
     _config_check_valid();
 }
 
@@ -246,29 +288,37 @@ void HAL_VAMeter::_backup_config_file()
 
 void HAL_VAMeter::saveSystemConfig()
 {
-    spdlog::info("save config to fs");
-
+    spdlog::info("save config to fs and nvs");
     _backup_config_file();
-
     std::string json_content = _create_config_json();
-
-    // Open file
     spdlog::info("open {}", _system_config_path);
     FILE* config_file = fopen(_system_config_path, "wb");
-    if (config_file == NULL)
+    if (config_file != NULL)
+    {
+        fputs(json_content.c_str(), config_file);
+        fflush(config_file);
+        fsync(fileno(config_file));
+        fclose(config_file);
+        spdlog::info("config saved to fs: {}", _system_config_path);
+    }
+    else
     {
         spdlog::error("Open config failed");
-        return;
     }
-
-    // Write and save
-    fputs(json_content.c_str(), config_file);
-    fclose(config_file);
-
-    spdlog::info("config saved: {}", _system_config_path);
+    nvsSet("cfg_bright", _config.brightness);
+    nvsSet("cfg_rot", _config.orientation);
+    nvsSet("cfg_beep", _config.beepOn ? 1 : 0);
+    nvsSet("cfg_hrf", _config.highRefreshRate ? 1 : 0);
+    nvsSet("cfg_rev_enc", _config.reverseEncoder ? 1 : 0);
+    nvsSet("cfg_locale", (int)_config.localeCode);
+    nvsSet("cfg_rec_time", (int32_t)_config.recordTime);
+    nvsSet("cfg_interval", (int32_t)_config.sampleIntervalMs);
+    nvsSet("cfg_trig_m", _config.triggerMode);
+    nvsSet("cfg_trig_th", (int32_t)(_config.threshold * 1000.0f));
 }
 
-/* -------------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------- *//* -------------------------------------------------------------------------- */
 /*                                    Misc                                    */
 /* -------------------------------------------------------------------------- */
 std::vector<std::string> HAL_VAMeter::_ls(const std::string& path)
