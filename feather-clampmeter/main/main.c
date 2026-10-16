@@ -40,6 +40,12 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "driver/i2c.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
+#include "driver/sdspi_host.h"
+#include <time.h>
+#include <sys/time.h>
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/temperature_sensor.h"
@@ -55,18 +61,44 @@
 
 static const char *TAG = "CLAMP_METER";
 
-#define PIN_ADC_CLAMP       ADC_CHANNEL_4 // GPIO4 (ADC1 Channel 4)
-#define PIN_BUZZER          GPIO_NUM_3    // GPIO3 (Buzzer)
-#define PIN_RGB_LED         GPIO_NUM_8    // GPIO8 (WS2812 RGB LED)
-#define PIN_ENC_A           GPIO_NUM_6
-#define PIN_ENC_B           GPIO_NUM_10
-#define PIN_ENC_SW          GPIO_NUM_9
+// I2C Bus (Feather S3 STEMMA QT default)
+#define I2C_MASTER_SCL_IO           GPIO_NUM_4
+#define I2C_MASTER_SDA_IO           GPIO_NUM_3
+#define I2C_MASTER_NUM              I2C_NUM_0
+#define I2C_MASTER_FREQ_HZ          400000
 
-#define PIN_LCD_MOSI        GPIO_NUM_0
-#define PIN_LCD_SCLK        GPIO_NUM_1
-#define PIN_LCD_DC          GPIO_NUM_2
-#define PIN_LCD_CS          GPIO_NUM_7
-#define PIN_LCD_BL          GPIO_NUM_5
+// I2C Addresses
+#define I2C_ADDR_DS3231             0x68
+#define I2C_ADDR_INA228_1           0x40
+#define I2C_ADDR_INA228_2           0x41
+
+// SPI Bus (Feather S3 Hardware FSPI Pins)
+#define PIN_LCD_MOSI                GPIO_NUM_35
+#define PIN_LCD_SCLK                GPIO_NUM_36
+#define PIN_SPI_MISO                GPIO_NUM_37
+
+// GC9A01 LCD
+#define PIN_LCD_CS                  GPIO_NUM_11
+#define PIN_LCD_DC                  GPIO_NUM_12
+#define PIN_LCD_BL                  GPIO_NUM_13
+
+// MicroSD Card Chip Select
+#define PIN_SD_CS                   GPIO_NUM_10
+
+// 3 Push Buttons
+#define PIN_BTN_LEFT                GPIO_NUM_18 // A0
+#define PIN_BTN_CENTER              GPIO_NUM_17 // A1
+#define PIN_BTN_RIGHT               GPIO_NUM_16 // A2
+
+// Analog LEM Sensors (ADC1)
+#define PIN_BUZZER          GPIO_NUM_NC   // Optional Piezo Buzzer (-1 if not fitted)
+#define PIN_ADC_HO100               ADC_CHANNEL_7 // GPIO 8 (A5)
+#define PIN_ADC_DHAB_CH1            ADC_CHANNEL_4 // GPIO 5 (D5)
+#define PIN_ADC_DHAB_CH2            ADC_CHANNEL_5 // GPIO 6 (D6)
+
+// Onboard NeoPixel
+#define PIN_RGB_LED                 GPIO_NUM_33
+#define PIN_NEOPIXEL_PWR            GPIO_NUM_21
 
 #define LCD_H_RES           240
 #define LCD_V_RES           240
@@ -223,6 +255,7 @@ static void update_rgb_led_state(void)
 /* -------------------------------------------------------------------------- */
 static void init_buzzer(void)
 {
+    if (PIN_BUZZER < 0) return;
     ledc_timer_config_t ledc_timer = {
         .speed_mode       = LEDC_LOW_SPEED_MODE,
         .timer_num        = LEDC_TIMER_0,
@@ -339,7 +372,7 @@ static void start_new_log_file(void)
 
     g_meter.log_file = fopen(g_meter.current_log_filename, "w");
     if (g_meter.log_file) {
-        fprintf(g_meter.log_file, "timestamp_s,current_A,sensor_V,temp_C\n");
+        fprintf(g_meter.log_file, "timestamp,elapsed_s,ho100_A,dhab_ch1_A,dhab_ch2_A,ina1_V,ina1_A,ina1_W,ina2_V,ina2_A,ina2_W,temp_C\n");
         fflush(g_meter.log_file);
         ESP_LOGI(TAG, "Started new log: %s", g_meter.current_log_filename);
     } else {
@@ -577,16 +610,137 @@ static void init_adc(void)
         .bitwidth = ADC_BITWIDTH_DEFAULT,
         .atten = ADC_ATTEN_DB_12,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc1_handle, PIN_ADC_CLAMP, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc1_handle, PIN_ADC_HO100, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc1_handle, PIN_ADC_DHAB_CH1, &config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(g_adc1_handle, PIN_ADC_DHAB_CH2, &config));
 
     adc_cali_curve_fitting_config_t cali_config = {
         .unit_id = ADC_UNIT_1,
-        .chan = PIN_ADC_CLAMP,
+        .chan = PIN_ADC_HO100,
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     if (adc_cali_create_scheme_curve_fitting(&cali_config, &g_adc1_cali_handle) == ESP_OK) {
         ESP_LOGI(TAG, "ADC Calibration curve fitting initialized");
+    }
+}
+
+
+/* -------------------------------------------------------------------------- */
+/*                               I2C & RTC Driver                             */
+/* -------------------------------------------------------------------------- */
+static sdmmc_card_t *g_sd_card = NULL;
+static bool g_sd_mounted = false;
+static bool g_rtc_online = false;
+static struct tm g_rtc_time;
+
+static bool g_ina1_online = false;
+static float g_ina1_v = 0, g_ina1_a = 0, g_ina1_w = 0;
+static bool g_ina2_online = false;
+static float g_ina2_v = 0, g_ina2_a = 0, g_ina2_w = 0;
+
+static float g_dhab_ch1_a = 0, g_dhab_ch2_a = 0;
+static float g_dhab_ch1_peak = 0, g_dhab_ch2_peak = 0;
+static float g_dhab_ch1_zero = 2.500f, g_dhab_ch2_zero = 2.500f;
+
+static int g_current_view = 0; // 0: HO-100-S, 1: DHAB S/157, 2: Dual INA228, 3: System Info
+
+static uint8_t bcd2dec(uint8_t val) { return ((val / 16 * 10) + (val % 16)); }
+
+static bool ds3231_read_time(struct tm *ti)
+{
+    uint8_t reg = 0x00;
+    uint8_t d[7];
+    if (i2c_master_write_read_device(I2C_MASTER_NUM, I2C_ADDR_DS3231, &reg, 1, d, 7, pdMS_TO_TICKS(50)) != ESP_OK)
+        return false;
+    ti->tm_sec  = bcd2dec(d[0] & 0x7F);
+    ti->tm_min  = bcd2dec(d[1] & 0x7F);
+    ti->tm_hour = bcd2dec(d[2] & 0x3F);
+    ti->tm_wday = bcd2dec(d[3] & 0x07) - 1;
+    ti->tm_mday = bcd2dec(d[4] & 0x3F);
+    ti->tm_mon  = bcd2dec(d[5] & 0x1F) - 1;
+    ti->tm_year = bcd2dec(d[6]) + 2000 - 1900;
+    return true;
+}
+
+static void init_i2c_bus(void)
+{
+    // Turn on NeoPixel / STEMMA QT 3.3V rail
+    gpio_config_t pwr_cfg = {
+        .pin_bit_mask = 1ULL << PIN_NEOPIXEL_PWR,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&pwr_cfg);
+    gpio_set_level(PIN_NEOPIXEL_PWR, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+    i2c_param_config(I2C_MASTER_NUM, &conf);
+    i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
+
+    struct tm t;
+    if (ds3231_read_time(&t)) {
+        g_rtc_online = true;
+        g_rtc_time = t;
+        ESP_LOGI(TAG, "DS3231 RTC online: %02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+    } else {
+        g_rtc_online = false;
+        ESP_LOGW(TAG, "DS3231 RTC not detected at 0x68");
+    }
+
+    uint8_t id_reg = 0x3F, id_buf[2];
+    g_ina1_online = (i2c_master_write_read_device(I2C_MASTER_NUM, I2C_ADDR_INA228_1, &id_reg, 1, id_buf, 2, pdMS_TO_TICKS(50)) == ESP_OK);
+    g_ina2_online = (i2c_master_write_read_device(I2C_MASTER_NUM, I2C_ADDR_INA228_2, &id_reg, 1, id_buf, 2, pdMS_TO_TICKS(50)) == ESP_OK);
+    ESP_LOGI(TAG, "INA228 Status: #1 (0x40)=%d, #2 (0x41)=%d", g_ina1_online, g_ina2_online);
+}
+
+static bool ina228_read(uint8_t addr, float *v, float *a, float *w)
+{
+    uint8_t reg = 0x05, buf[3];
+    if (i2c_master_write_read_device(I2C_MASTER_NUM, addr, &reg, 1, buf, 3, pdMS_TO_TICKS(50)) != ESP_OK) return false;
+    int32_t raw_v = ((buf[0] << 16) | (buf[1] << 8) | buf[2]) >> 4;
+    *v = (float)raw_v * 195.3125e-6f;
+
+    reg = 0x07;
+    if (i2c_master_write_read_device(I2C_MASTER_NUM, addr, &reg, 1, buf, 3, pdMS_TO_TICKS(50)) != ESP_OK) return false;
+    int32_t raw_i = ((buf[0] << 16) | (buf[1] << 8) | buf[2]) >> 4;
+    if (raw_i & 0x80000) raw_i |= 0xFFF00000;
+    *a = (float)raw_i * 0.001f;
+
+    *w = fabsf(*v * *a);
+    return true;
+}
+
+static void init_sd_card_storage(void)
+{
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI2_HOST;
+
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.gpio_cs = PIN_SD_CS;
+    slot_config.host_id = SPI2_HOST;
+
+    if (esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_config, &mount_config, &g_sd_card) == ESP_OK) {
+        g_sd_mounted = true;
+        ESP_LOGI(TAG, "MicroSD mounted at /sdcard");
+    } else {
+        g_sd_mounted = false;
+        ESP_LOGW(TAG, "MicroSD not mounted, falling back to SPIFFS");
     }
 }
 
@@ -598,7 +752,7 @@ static void read_clamp_telemetry(float *out_amps, float *out_sensor_v, float *ou
     int accum_mv = 0;
 
     for (int i = 0; i < OVERSAMPLE_COUNT; i++) {
-        adc_oneshot_read(g_adc1_handle, PIN_ADC_CLAMP, &raw);
+        adc_oneshot_read(g_adc1_handle, PIN_ADC_HO100, &raw);
         if (g_adc1_cali_handle) {
             adc_cali_raw_to_voltage(g_adc1_cali_handle, raw, &voltage_mv);
             accum_mv += voltage_mv;
@@ -612,6 +766,22 @@ static void read_clamp_telemetry(float *out_amps, float *out_sensor_v, float *ou
 
     *out_amps = current_amps;
     *out_sensor_v = v_sensor_out;
+
+    // Read DHAB S/157
+    int raw_d1 = 0, raw_d2 = 0;
+    adc_oneshot_read(g_adc1_handle, PIN_ADC_DHAB_CH1, &raw_d1);
+    adc_oneshot_read(g_adc1_handle, PIN_ADC_DHAB_CH2, &raw_d2);
+    float v_d1 = ((raw_d1 * 3300) / 4095.0f / 1000.0f) / DIVIDER_RATIO;
+    float v_d2 = ((raw_d2 * 3300) / 4095.0f / 1000.0f) / DIVIDER_RATIO;
+    g_dhab_ch1_a = (v_d1 - g_dhab_ch1_zero) / 0.0200f;     // +-100A, 20mV/A
+    g_dhab_ch2_a = (v_d2 - g_dhab_ch2_zero) / 0.005714f;   // +-350A, 5.714mV/A
+    if (fabsf(g_dhab_ch1_a) > g_dhab_ch1_peak) g_dhab_ch1_peak = fabsf(g_dhab_ch1_a);
+    if (fabsf(g_dhab_ch2_a) > g_dhab_ch2_peak) g_dhab_ch2_peak = fabsf(g_dhab_ch2_a);
+
+    // Read Dual INA228s
+    if (g_ina1_online) ina228_read(I2C_ADDR_INA228_1, &g_ina1_v, &g_ina1_a, &g_ina1_w);
+    if (g_ina2_online) ina228_read(I2C_ADDR_INA228_2, &g_ina2_v, &g_ina2_a, &g_ina2_w);
+    if (g_rtc_online) ds3231_read_time(&g_rtc_time);
 
     if (g_temp_sensor) {
         temperature_sensor_get_celsius(g_temp_sensor, out_temp_c);
@@ -896,7 +1066,7 @@ static void draw_hold_menu(void)
         }
     }
 
-    fb_draw_string_centered(cx, 204, "TURN:NAV | CLICK:OK", C_CYAN, 1);
+    fb_draw_string_centered(cx, 204, "[<]/[>]: NAV | [SEL]: OK", C_CYAN, 1);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -922,7 +1092,7 @@ static void draw_wifi_server_screen(void)
 
     fb_draw_string(32, 148, "DOWNLOAD CSV FILES", C_WHITE, 1);
 
-    fb_draw_string_centered(cx, 188, "CLICK KNOB TO EXIT", C_ORANGE, 1);
+    fb_draw_string_centered(cx, 188, "PRESS [SEL] TO EXIT", C_ORANGE, 1);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -952,7 +1122,7 @@ static void draw_telemetry_screen(void)
     }
 
     // Top Header Banner (y=16, y=28)
-    fb_draw_string_centered(cx, 16, "LEM HO-100-S", C_WHITE, 1);
+    fb_draw_string_centered(cx, 16, "LEM HO-100-S (1/4)", C_WHITE, 1);
 
     char rec_str[24];
     uint32_t now_ms = esp_timer_get_time() / 1000;
@@ -1006,7 +1176,7 @@ static void draw_telemetry_screen(void)
         snprintf(log_info, sizeof(log_info), "LOGS: %lu (%lus)", g_meter.log_count, g_meter.log_interval_s);
         fb_draw_string_centered(cx, 186, log_info, C_GREEN, 1);
     } else {
-        fb_draw_string_centered(cx, 186, "CLICK:LOG | HOLD:MENU", C_WHITE, 1);
+        fb_draw_string_centered(cx, 186, "[SEL]: LOG | HOLD: MENU", C_WHITE, 1);
     }
 
     // Notification Banner Toast (y=196)
@@ -1020,6 +1190,109 @@ static void draw_telemetry_screen(void)
 /* -------------------------------------------------------------------------- */
 /*                            Frame Render Pipeline                           */
 /* -------------------------------------------------------------------------- */
+
+static void draw_dhab_screen(void)
+{
+    int cx = 120;
+    fb_draw_string_centered(cx, 16, "LEM DHAB S/157", C_WHITE, 1);
+    fb_draw_string_centered(cx, 28, "DUAL TRANSDUCER (2/4)", C_YELLOW, 1);
+
+    // Channel 1: +-100A
+    fb_draw_rect(24, 44, 192, 58, C_GREEN);
+    fb_draw_string(32, 48, "CH1: LOW RANGE (+-100A)", C_LIGHT_GRAY, 1);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%+.2f A", g_dhab_ch1_a);
+    uint16_t c1 = (g_dhab_ch1_a >= 0) ? C_GREEN : C_RED;
+    fb_draw_string(36, 64, buf, c1, 2);
+    snprintf(buf, sizeof(buf), "PEAK: %.1fA", g_dhab_ch1_peak);
+    fb_draw_string(140, 84, buf, C_YELLOW, 1);
+
+    // Channel 2: +-350A
+    fb_draw_rect(24, 108, 192, 58, C_ORANGE);
+    fb_draw_string(32, 112, "CH2: HIGH RANGE (+-350A)", C_LIGHT_GRAY, 1);
+    snprintf(buf, sizeof(buf), "%+.1f A", g_dhab_ch2_a);
+    uint16_t c2 = (g_dhab_ch2_a >= 0) ? C_ORANGE : C_RED;
+    fb_draw_string(36, 128, buf, c2, 2);
+    snprintf(buf, sizeof(buf), "PEAK: %.1fA", g_dhab_ch2_peak);
+    fb_draw_string(140, 148, buf, C_YELLOW, 1);
+
+    fb_draw_string_centered(cx, 186, "[<] PREV | [>] NEXT", C_WHITE, 1);
+}
+
+static void draw_ina228_screen(void)
+{
+    int cx = 120;
+    fb_draw_string_centered(cx, 16, "DUAL INA228 85V", C_CYAN, 1);
+    fb_draw_string_centered(cx, 28, "PRECISION MONITOR (3/4)", C_WHITE, 1);
+
+    char buf[32];
+    // INA228 #1
+    fb_draw_rect(22, 42, 196, 62, C_CYAN);
+    fb_draw_string(28, 46, "INA228 #1 (0x40)", C_YELLOW, 1);
+    if (g_ina1_online) {
+        snprintf(buf, sizeof(buf), "%.2fV  %+.3fA", g_ina1_v, g_ina1_a);
+        fb_draw_string(28, 60, buf, C_WHITE, 1);
+        snprintf(buf, sizeof(buf), "%.2f W", g_ina1_w);
+        fb_draw_string(28, 76, buf, C_GREEN, 2);
+    } else {
+        fb_draw_string(28, 64, "OFFLINE / NOT FOUND", C_RED, 1);
+    }
+
+    // INA228 #2
+    fb_draw_rect(22, 110, 196, 62, C_PURPLE);
+    fb_draw_string(28, 114, "INA228 #2 (0x41)", C_YELLOW, 1);
+    if (g_ina2_online) {
+        snprintf(buf, sizeof(buf), "%.2fV  %+.3fA", g_ina2_v, g_ina2_a);
+        fb_draw_string(28, 128, buf, C_WHITE, 1);
+        snprintf(buf, sizeof(buf), "%.2f W", g_ina2_w);
+        fb_draw_string(28, 144, buf, C_GREEN, 2);
+    } else {
+        fb_draw_string(28, 132, "OFFLINE / NOT FOUND", C_RED, 1);
+    }
+
+    fb_draw_string_centered(cx, 186, "[<] PREV | [>] NEXT", C_WHITE, 1);
+}
+
+static void draw_sysinfo_screen(void)
+{
+    int cx = 120;
+    fb_draw_string_centered(cx, 16, "SYSTEM & STORAGE", C_WHITE, 1);
+    fb_draw_string_centered(cx, 28, "INSTRUMENT STATUS (4/4)", C_CYAN, 1);
+
+    char buf[40];
+    // RTC
+    fb_draw_rect(24, 44, 192, 38, C_CARD_BORDER);
+    fb_draw_string(30, 48, "DS3231 RTC TIME:", C_LIGHT_GRAY, 1);
+    if (g_rtc_online) {
+        snprintf(buf, sizeof(buf), "%02d:%02d:%02d  %02d/%02d/%04d",
+                 g_rtc_time.tm_hour, g_rtc_time.tm_min, g_rtc_time.tm_sec,
+                 g_rtc_time.tm_mday, g_rtc_time.tm_mon + 1, g_rtc_time.tm_year + 1900);
+        fb_draw_string(30, 62, buf, C_CYAN, 1);
+    } else {
+        fb_draw_string(30, 62, "RTC NOT DETECTED", C_RED, 1);
+    }
+
+    // SD / Storage
+    fb_draw_rect(24, 88, 192, 40, C_CARD_BORDER);
+    fb_draw_string(30, 92, "STORAGE TARGET:", C_LIGHT_GRAY, 1);
+    if (g_sd_mounted) {
+        fb_draw_string(30, 106, "MICROSD (/sdcard) FATFS", C_GREEN, 1);
+    } else {
+        fb_draw_string(30, 106, "SPIFFS FLASH (/spiffs)", C_ORANGE, 1);
+    }
+
+    // Wi-Fi
+    fb_draw_rect(24, 134, 192, 38, C_CARD_BORDER);
+    fb_draw_string(30, 138, "HTTP LOG PORTAL:", C_LIGHT_GRAY, 1);
+    if (g_meter.in_wifi_server) {
+        fb_draw_string(30, 152, "http://192.168.4.1", C_GREEN, 1);
+    } else {
+        fb_draw_string(30, 152, "HOLD [SEL] -> WIFI ON", C_LIGHT_GRAY, 1);
+    }
+
+    fb_draw_string_centered(cx, 186, "[<] PREV | [>] NEXT", C_WHITE, 1);
+}
+
 static void render_screen(void)
 {
     if (!s_fb || !g_panel_handle) return;
@@ -1031,7 +1304,10 @@ static void render_screen(void)
     } else if (g_meter.in_menu) {
         draw_hold_menu();
     } else {
-        draw_telemetry_screen();
+        if (g_current_view == 0) draw_telemetry_screen();
+        else if (g_current_view == 1) draw_dhab_screen();
+        else if (g_current_view == 2) draw_ina228_screen();
+        else draw_sysinfo_screen();
     }
 
     esp_lcd_panel_draw_bitmap(g_panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, s_fb);
@@ -1043,7 +1319,7 @@ static void render_screen(void)
 static void init_buttons(void)
 {
     gpio_config_t btn_cfg = {
-        .pin_bit_mask = (1ULL << PIN_ENC_SW) | (1ULL << PIN_ENC_A) | (1ULL << PIN_ENC_B),
+        .pin_bit_mask = (1ULL << PIN_BTN_LEFT) | (1ULL << PIN_BTN_CENTER) | (1ULL << PIN_BTN_RIGHT),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -1165,70 +1441,31 @@ static void execute_menu_action(MenuItem_t item)
 
 static void input_task(void *pvParam)
 {
-    bool last_sw = true;
-    uint32_t press_start_ms = 0;
-    uint8_t last_enc_state = 0;
-    int enc_accum = 0;
+    bool last_left = true, last_center = true, last_right = true;
+    uint32_t center_press_ms = 0;
 
     while (1) {
         uint32_t now_ms = esp_timer_get_time() / 1000;
+        bool b_left = gpio_get_level(PIN_BTN_LEFT);
+        bool b_center = gpio_get_level(PIN_BTN_CENTER);
+        bool b_right = gpio_get_level(PIN_BTN_RIGHT);
 
-        // 1. Read Rotary Encoder Knob with 4-step Detent Accumulator
-        uint8_t a = gpio_get_level(PIN_ENC_A);
-        uint8_t b = gpio_get_level(PIN_ENC_B);
-        uint8_t enc_state = (a << 1) | b;
-
-        if (enc_state != last_enc_state) {
-            static const int8_t quad_table[16] = {
-                0, -1,  1,  0,
-                1,  0,  0, -1,
-               -1,  0,  0,  1,
-                0,  1, -1,  0
-            };
-            uint8_t idx = (last_enc_state << 2) | enc_state;
-            enc_accum += quad_table[idx];
-
-            if (enc_accum >= 4) {
-                enc_accum = 0;
-                xSemaphoreTake(g_mutex, portMAX_DELAY);
-                if (g_meter.in_menu) {
-                    g_meter.menu_cursor = (g_meter.menu_cursor + 1) % MENU_ITEM_MAX;
-                    g_meter.menu_last_activity_ms = now_ms;
-                    buzzer_click();
-                }
-                xSemaphoreGive(g_mutex);
-            } else if (enc_accum <= -4) {
-                enc_accum = 0;
-                xSemaphoreTake(g_mutex, portMAX_DELAY);
-                if (g_meter.in_menu) {
-                    g_meter.menu_cursor = (g_meter.menu_cursor - 1 + MENU_ITEM_MAX) % MENU_ITEM_MAX;
-                    g_meter.menu_last_activity_ms = now_ms;
-                    buzzer_click();
-                }
-                xSemaphoreGive(g_mutex);
-            }
-            last_enc_state = enc_state;
-        }
-
-        // 2. Read Rotary Encoder Switch
-        bool sw = gpio_get_level(PIN_ENC_SW);
-        if (!sw && last_sw) {
-            press_start_ms = now_ms;
-        } else if (sw && !last_sw) {
-            uint32_t duration_ms = now_ms - press_start_ms;
+        if (!b_center && last_center) {
+            center_press_ms = now_ms;
+        } else if (b_center && !last_center) {
+            uint32_t dur = now_ms - center_press_ms;
             xSemaphoreTake(g_mutex, portMAX_DELAY);
 
             if (g_meter.in_wifi_server) {
                 stop_wifi_web_server();
                 buzzer_cancel();
                 show_toast("WIFI STOPPED", 1500);
-            } else if (duration_ms > 800) {
+            } else if (dur > 800) {
                 g_meter.in_menu = !g_meter.in_menu;
                 g_meter.menu_cursor = 0;
                 g_meter.menu_last_activity_ms = now_ms;
                 buzzer_confirm();
-                ESP_LOGI(TAG, "Menu toggled: %d", g_meter.in_menu);
-            } else if (duration_ms > 30) {
+            } else if (dur > 30) {
                 if (g_meter.in_menu) {
                     execute_menu_action((MenuItem_t)g_meter.menu_cursor);
                     g_meter.menu_last_activity_ms = now_ms;
@@ -1250,7 +1487,30 @@ static void input_task(void *pvParam)
             }
             xSemaphoreGive(g_mutex);
         }
-        last_sw = sw;
+
+        if (!b_left && last_left) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (g_meter.in_menu) {
+                g_meter.menu_cursor = (g_meter.menu_cursor - 1 + MENU_ITEM_MAX) % MENU_ITEM_MAX;
+                g_meter.menu_last_activity_ms = now_ms;
+                buzzer_click();
+            }
+            xSemaphoreGive(g_mutex);
+        }
+
+        if (!b_right && last_right) {
+            xSemaphoreTake(g_mutex, portMAX_DELAY);
+            if (g_meter.in_menu) {
+                g_meter.menu_cursor = (g_meter.menu_cursor + 1) % MENU_ITEM_MAX;
+                g_meter.menu_last_activity_ms = now_ms;
+                buzzer_click();
+            }
+            xSemaphoreGive(g_mutex);
+        }
+
+        last_left = b_left;
+        last_center = b_center;
+        last_right = b_right;
 
         if (g_meter.in_menu && (now_ms - g_meter.menu_last_activity_ms > 12000)) {
             xSemaphoreTake(g_mutex, portMAX_DELAY);
@@ -1258,7 +1518,7 @@ static void input_task(void *pvParam)
             xSemaphoreGive(g_mutex);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(15));
     }
 }
 
@@ -1333,6 +1593,8 @@ void app_main(void)
 
     g_mutex = xSemaphoreCreateMutex();
 
+    init_i2c_bus();
+    init_sd_card_storage();
     init_spiffs();
     init_adc();
     init_rgb_led();
