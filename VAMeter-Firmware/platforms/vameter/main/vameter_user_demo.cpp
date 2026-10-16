@@ -9,6 +9,15 @@
 #include <esp_partition.h>
 #include <spi_flash_mmap.h>
 #include <nvs_flash.h>
+#include <esp_random.h>
+
+extern "C" int getentropy(void *buffer, size_t length) {
+    if (buffer == NULL) {
+        return -1;
+    }
+    esp_fill_random(buffer, length);
+    return 0;
+}
 
 extern "C" void app_main(void)
 {
