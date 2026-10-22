@@ -1,0 +1,27 @@
+# ESP32-S3 Target Configuration (Adafruit Feather ESP32-S3 PID 5323: 8MB Flash, No PSRAM)
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash settings: 8MB Flash
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# NO PSRAM on this board
+# CONFIG_ESP32S3_SPIRAM_SUPPORT is not set
+
+# Route console output directly through USB-C (USB Serial JTAG)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# FreeRTOS 1000Hz tick rate
+CONFIG_FREERTOS_HZ=1000
+
+# Power & Dynamic Frequency Scaling
+# CONFIG_PM_ENABLE is not set
+
+# FATFS Configuration for SD Card
+CONFIG_FATFS_LONG_FILENAMES=y
+CONFIG_FATFS_MAX_LFN=128
+CONFIG_FATFS_API_ENCODING_UTF_8=y
+CONFIG_FATFS_PER_FILE_CACHE=y
+
+# Log Level
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
