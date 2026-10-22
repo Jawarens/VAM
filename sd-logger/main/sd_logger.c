@@ -29,6 +29,10 @@ static size_t s_chunk_offset = 0;
 static void sd_writer_task(void *pvParameters);
 
 esp_err_t sd_logger_init(void) {
+    esp_log_level_set("sdmmc_init", ESP_LOG_DEBUG);
+    esp_log_level_set("sdmmc_sd", ESP_LOG_DEBUG);
+    esp_log_level_set("sdmmc_common", ESP_LOG_DEBUG);
+    esp_log_level_set("sdspi_host", ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Initializing SPI MicroSD card on SPI2_HOST...");
 
     // Create the queue and background writer task regardless of initial SD mount status
@@ -37,9 +41,21 @@ esp_err_t sd_logger_init(void) {
         xTaskCreatePinnedToCore(sd_writer_task, "sd_writer", 4096, NULL, 4, NULL, 1);
     }
 
+    // Ensure MISO, MOSI and CS have internal pull-ups enabled for SPI SD integrity
+    gpio_set_pull_mode(PIN_SD_MISO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(PIN_SD_MOSI, GPIO_PULLUP_ONLY);
+    gpio_config_t cs_pre = {
+        .pin_bit_mask = (1ULL << PIN_SD_CS),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    gpio_config(&cs_pre);
+    gpio_set_level(PIN_SD_CS, 1);
+
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;
-    host.max_freq_khz = 20000;
+    host.max_freq_khz = 10000; // 10 MHz for rock-solid SPI SD transfers
+    host.flags |= SDMMC_HOST_FLAG_SPI_IGNORE_DATA_CRC; // Support all 32GB/64GB SDHC/SDXC cards in SPI mode
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = PIN_SD_CS;
@@ -55,6 +71,14 @@ esp_err_t sd_logger_init(void) {
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "MicroSD card not mounted (%s). Ready to remount on insertion.", esp_err_to_name(ret));
         g_sys_state.sd_mounted = false;
+        // CRITICAL: Ensure SD CS is driven HIGH so the SD card buffer does NOT interfere with the LCD!
+        gpio_config_t cs_fix = {
+            .pin_bit_mask = (1ULL << PIN_SD_CS),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+        };
+        gpio_config(&cs_fix);
+        gpio_set_level(PIN_SD_CS, 1);
         return ret;
     }
 

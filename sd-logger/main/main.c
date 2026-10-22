@@ -47,6 +47,18 @@ static void usb_cli_task(void *pvParameters);
 void app_main(void) {
     ESP_LOGI(TAG, "=== 24h+ Multi-Channel SD Telemetry Logger Starting ===");
 
+    // -1. Immediately pull both SD CS (GPIO 11) and LCD CS (GPIO 12) HIGH to isolate shared SPI bus!
+    gpio_config_t cs_init_cfg = {
+        .pin_bit_mask = (1ULL << PIN_SD_CS) | (1ULL << PIN_LCD_CS),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cs_init_cfg);
+    gpio_set_level(PIN_SD_CS, 1);
+    gpio_set_level(PIN_LCD_CS, 1);
+
     // 0. Enable Power to STEMMA QT / I2C Connector (GPIO 7)
     gpio_config_t pwr_cfg = {
         .pin_bit_mask = (1ULL << PIN_I2C_POWER),
@@ -379,14 +391,23 @@ static void usb_cli_task(void *pvParameters) {
                     printf("<FILE_DATA_END:%s>\n", fname);
                 }
             } else if (strcmp(line, "STATUS") == 0) {
-                printf("STATUS: Total_I=%.2fA, V=%.2fV, P=%.1fW, Batt=%.2fV(%u%%), Recs=%lu, Zeroed=%d\n",
+                printf("STATUS: Total_I=%.2fA, INA1=(%.2fV, %.3fA), INA2=(%.2fV, %.3fA), DHAB=%.2fA, HO100=%.2fA, P=%.1fW, Batt=%.2fV(%u%%), Recs=%lu, Zeroed=%d, SD=%s\n",
                        g_sys_state.latest_telemetry.total_system_current_a,
                        g_sys_state.latest_telemetry.ina1_bus_voltage_v,
+                       g_sys_state.latest_telemetry.ina1_current_a,
+                       g_sys_state.latest_telemetry.ina2_bus_voltage_v,
+                       g_sys_state.latest_telemetry.ina2_current_a,
+                       g_sys_state.latest_telemetry.dhab_current_a,
+                       g_sys_state.latest_telemetry.ho100_current_a,
                        g_sys_state.latest_telemetry.total_power_w,
                        g_sys_state.latest_telemetry.battery_v,
                        g_sys_state.latest_telemetry.battery_pct,
                        (unsigned long)g_sys_state.records_written,
-                       g_sys_state.is_zeroed ? 1 : 0);
+                       g_sys_state.is_zeroed ? 1 : 0,
+                       g_sys_state.sd_mounted ? "MOUNTED" : "NO_SD");
+            } else if (strcmp(line, "MOUNT") == 0) {
+                esp_err_t err = sd_logger_init();
+                printf("MOUNT_RESULT: %s\n", esp_err_to_name(err));
             } else if (strcmp(line, "ZERO") == 0) {
                 g_sys_state.ina1_zero_offset_a = g_sys_state.latest_telemetry.ina1_current_a + g_sys_state.ina1_zero_offset_a;
                 g_sys_state.ina2_zero_offset_a = g_sys_state.latest_telemetry.ina2_current_a + g_sys_state.ina2_zero_offset_a;
