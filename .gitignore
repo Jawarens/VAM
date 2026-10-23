@@ -20,3 +20,8 @@ venv/
 # System / OS
 .DS_Store
 Thumbs.db
+\
+
+# User Telemetry Logs
+logs/
+**/logs/
