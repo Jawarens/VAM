@@ -217,3 +217,9 @@ static void sd_writer_task(void *pvParameters) {
         }
     }
 }
+
+void sd_logger_diag(void) {
+    ESP_LOGI(TAG, "=== SD CARD DIAGNOSTIC ===");
+    esp_err_t err = sd_logger_init();
+    printf("MOUNT_RESULT: %s\n", esp_err_to_name(err));
+}

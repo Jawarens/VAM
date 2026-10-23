@@ -344,6 +344,7 @@ static void usb_cli_task(void *pvParameters) {
 
             if (strcmp(line, "HELP") == 0) {
                 printf("=== VAM LOGGER USB COMMANDS ===\n");
+                printf("DIAG               - Run low-level SD card SPI pin & command diagnostic\n");
                 printf("LIST               - List all CSV log files on SD card\n");
                 printf("READ <filename>    - Download/stream a CSV file over USB\n");
                 printf("STATUS             - Print current telemetry snapshot\n");
@@ -405,6 +406,8 @@ static void usb_cli_task(void *pvParameters) {
                        (unsigned long)g_sys_state.records_written,
                        g_sys_state.is_zeroed ? 1 : 0,
                        g_sys_state.sd_mounted ? "MOUNTED" : "NO_SD");
+            } else if (strcmp(line, "DIAG") == 0) {
+                sd_logger_diag();
             } else if (strcmp(line, "MOUNT") == 0) {
                 esp_err_t err = sd_logger_init();
                 printf("MOUNT_RESULT: %s\n", esp_err_to_name(err));
