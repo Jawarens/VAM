@@ -1,3 +1,4 @@
+#include <math.h>
 #include "display_gc9a01.h"
 #include "config_pins.h"
 #include "boot_logo.h"
@@ -304,32 +305,44 @@ void display_gc9a01_set_brightness(uint8_t brightness_pct) {
 }
 
 static void render_screen_overview(const system_state_t *state) {
-    // Large Center Readout: Total System Current
+    // Large Center Readout: Total System Current with deadband to eliminate flickering
+    float disp_curr = state->latest_telemetry.total_system_current_a;
     char curr_str[32];
-    snprintf(curr_str, sizeof(curr_str), "%+.2f A", state->latest_telemetry.total_system_current_a);
-    uint16_t curr_color = (state->latest_telemetry.total_system_current_a < 0.0f) ? C_RED : C_GREEN;
-    fb_draw_string_centered(120, 78, curr_str, curr_color, 3);
+    uint16_t curr_color;
+
+    // 50mA Deadband around 0: sits cleanly in calm white instead of jumping between green & red
+    if (fabsf(disp_curr) <= 0.05f) {
+        snprintf(curr_str, sizeof(curr_str), " 0.00 A");
+        curr_color = C_WHITE;
+    } else if (disp_curr > 0.05f) {
+        snprintf(curr_str, sizeof(curr_str), "%+.2f A", disp_curr);
+        curr_color = C_GREEN;
+    } else {
+        snprintf(curr_str, sizeof(curr_str), "%+.2f A", disp_curr);
+        curr_color = C_RED;
+    }
+    fb_draw_string_centered(120, 80, curr_str, curr_color, 3);
 
     // Primary Voltage & Total Power
     char vp_str[48];
     float v_display = (state->latest_telemetry.ina1_bus_voltage_v > 0.5f) ?
                        state->latest_telemetry.ina1_bus_voltage_v : state->latest_telemetry.ina2_bus_voltage_v;
     snprintf(vp_str, sizeof(vp_str), "%.2fV  %.1fW", v_display, state->latest_telemetry.total_power_w);
-    fb_draw_string_centered(120, 114, vp_str, C_WHITE, 2);
+    fb_draw_string_centered(120, 112, vp_str, C_WHITE, 2);
 
     // Dual INA Currents line
     char ina_str[48];
     snprintf(ina_str, sizeof(ina_str), "I1:%+.2fA  I2:%+.2fA",
              state->latest_telemetry.ina1_current_a,
              state->latest_telemetry.ina2_current_a);
-    fb_draw_string_centered(120, 140, ina_str, C_CYAN, 1);
+    fb_draw_string_centered(120, 134, ina_str, C_CYAN, 1);
 
     // LEM Hall Clamps line
     char lem_str[48];
     snprintf(lem_str, sizeof(lem_str), "DHAB:%+.1fA HO:%+.1fA",
              state->latest_telemetry.dhab_current_a,
              state->latest_telemetry.ho100_current_a);
-    fb_draw_string_centered(120, 156, lem_str, C_YELLOW, 1);
+    fb_draw_string_centered(120, 150, lem_str, C_YELLOW, 1);
 
     // MicroSD Status
     char sd_str[48];
@@ -338,30 +351,7 @@ static void render_screen_overview(const system_state_t *state) {
     } else {
         snprintf(sd_str, sizeof(sd_str), "SD:NO CARD / ERR");
     }
-    fb_draw_string_centered(120, 172, sd_str, state->sd_mounted ? C_GREEN : C_ORANGE, 1);
-
-    // 18650 Battery Bank Indicator & % (Bottom of Overview Screen)
-    float vbat = state->latest_telemetry.battery_v;
-    uint8_t pct = state->latest_telemetry.battery_pct;
-
-    if (vbat >= 2.50f) {
-        int bx = 70, by = 192;
-        fb_draw_rect(bx, by, 22, 12, C_WHITE);
-        fb_fill_rect(bx + 22, by + 3, 3, 6, C_WHITE); // Positive nub
-
-        int fill_w = (pct * 18) / 100;
-        if (fill_w > 18) fill_w = 18;
-        uint16_t fill_color = (pct > 50) ? C_GREEN : ((pct >= 20) ? C_YELLOW : C_RED);
-        if (fill_w > 0) {
-            fb_fill_rect(bx + 2, by + 2, fill_w, 8, fill_color);
-        }
-
-        char batt_str[32];
-        snprintf(batt_str, sizeof(batt_str), "%.2fV %u%%", vbat, pct);
-        fb_draw_string(bx + 31, by + 3, batt_str, C_WHITE, 1);
-    } else {
-        fb_draw_string_centered(120, 194, "[USB POWER]", C_CYAN, 1);
-    }
+    fb_draw_string_centered(120, 166, sd_str, state->sd_mounted ? C_GREEN : C_ORANGE, 1);
 }
 
 static void render_screen_ina(const system_state_t *state) {
@@ -458,15 +448,37 @@ void display_gc9a01_update(const system_state_t *state) {
     uint16_t dial_color = state->is_logging ? C_RED : C_CYAN;
     fb_draw_circle_arc(120, 120, 118, 115, dial_color);
 
-    fb_draw_string_centered(120, 22, "VAM LOGGER", C_YELLOW, 2);
+    fb_draw_string_centered(120, 18, "VAM LOGGER", C_YELLOW, 2);
 
-    // Recording / Standby Badge + TARE indicator
-    if (state->is_logging) {
-        fb_fill_rect(65, 46, 110, 18, C_RED);
-        fb_draw_string_centered(120, 50, state->is_zeroed ? "REC [TARE]" : "RECORDING", C_WHITE, 1);
+    // Battery Bank Indicator (Y = 34): Cleanly placed under title, never overlapping page info!
+    float vbat = state->latest_telemetry.battery_v;
+    uint8_t pct = state->latest_telemetry.battery_pct;
+    if (vbat >= 2.50f) {
+        int bx = 76, by = 33;
+        fb_draw_rect(bx, by, 20, 10, C_WHITE);
+        fb_fill_rect(bx + 20, by + 2, 2, 6, C_WHITE); // Positive nub
+
+        int fill_w = (pct * 16) / 100;
+        if (fill_w > 16) fill_w = 16;
+        uint16_t fill_color = (pct > 50) ? C_GREEN : ((pct >= 20) ? C_YELLOW : C_RED);
+        if (fill_w > 0) {
+            fb_fill_rect(bx + 2, by + 2, fill_w, 6, fill_color);
+        }
+
+        char batt_str[32];
+        snprintf(batt_str, sizeof(batt_str), "%.2fV %u%%", vbat, pct);
+        fb_draw_string(bx + 28, by + 1, batt_str, C_WHITE, 1);
     } else {
-        fb_fill_rect(70, 46, 100, 18, C_CARD_BG);
-        fb_draw_string_centered(120, 50, state->is_zeroed ? "STANDBY [TARE]" : "STANDBY", state->is_zeroed ? C_CYAN : C_GREEN, 1);
+        fb_draw_string_centered(120, 34, "[USB POWER]", C_CYAN, 1);
+    }
+
+    // Recording / Standby Badge (Y = 50)
+    if (state->is_logging) {
+        fb_fill_rect(65, 48, 110, 16, C_RED);
+        fb_draw_string_centered(120, 52, state->is_zeroed ? "REC [TARE]" : "RECORDING", C_WHITE, 1);
+    } else {
+        fb_fill_rect(70, 48, 100, 16, C_CARD_BG);
+        fb_draw_string_centered(120, 52, state->is_zeroed ? "STANDBY [TARE]" : "STANDBY", state->is_zeroed ? C_CYAN : C_GREEN, 1);
     }
 
     switch (state->ui_screen) {
@@ -494,12 +506,12 @@ void display_gc9a01_update(const system_state_t *state) {
 
     char nav_str[48];
     snprintf(nav_str, sizeof(nav_str), "< P%u/3 > [Hold A1:Zero]", state->ui_screen);
-    fb_draw_string_centered(120, 192, nav_str, C_GRAY, 1);
+    fb_draw_string_centered(120, 186, nav_str, C_GRAY, 1);
 
     if (state->is_logging) {
-        fb_draw_string_centered(120, 206, "[A2] STOP LOG", C_RED, 1);
+        fb_draw_string_centered(120, 204, "[A2] STOP LOG", C_RED, 1);
     } else {
-        fb_draw_string_centered(120, 206, "[A2] START LOG", C_GREEN, 1);
+        fb_draw_string_centered(120, 204, "[A2] START LOG", C_GREEN, 1);
     }
 
     esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_fb);

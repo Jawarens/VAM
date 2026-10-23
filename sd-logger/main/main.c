@@ -124,7 +124,7 @@ void app_main(void) {
     // Launch FreeRTOS tasks
     xTaskCreatePinnedToCore(telemetry_sampler_task, "sampler", 4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(gui_task, "gui", 4096, NULL, 2, NULL, 1);
-    xTaskCreatePinnedToCore(button_task, "buttons", 2048, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(button_task, "buttons", 5120, NULL, 3, NULL, 1);
     xTaskCreatePinnedToCore(usb_cli_task, "usb_cli", 4096, NULL, 1, NULL, 0);
 
     ESP_LOGI(TAG, "System ready. Click A2 to Log. A1/A3 to change screen. Hold A1 (1.5s) to Zero.");
@@ -211,8 +211,11 @@ static void telemetry_sampler_task(void *pvParameters) {
             rec.ho100_current_a = raw_ho100_a;
         }
 
-        // Combined Total Metrics
-        rec.total_system_current_a = rec.ina1_current_a + rec.ina2_current_a + rec.dhab_current_a + rec.ho100_current_a;
+        // Combined Total Metrics with EMA smoothing to eliminate noise jitter
+        float raw_total_i = rec.ina1_current_a + rec.ina2_current_a + rec.dhab_current_a + rec.ho100_current_a;
+        static float s_smoothed_total_i = 0.0f;
+        s_smoothed_total_i = (s_smoothed_total_i * 0.75f) + (raw_total_i * 0.25f);
+        rec.total_system_current_a = s_smoothed_total_i;
         float v_primary = (rec.ina1_bus_voltage_v > 0.5f) ? rec.ina1_bus_voltage_v :
                           ((rec.ina2_bus_voltage_v > 0.5f) ? rec.ina2_bus_voltage_v : 12.0f);
         rec.total_power_w = rec.ina1_power_w + rec.ina2_power_w + (v_primary * (rec.dhab_current_a + rec.ho100_current_a));
@@ -242,7 +245,8 @@ static void telemetry_sampler_task(void *pvParameters) {
 static void gui_task(void *pvParameters) {
     while (1) {
         display_gc9a01_update(&g_sys_state);
-        vTaskDelay(pdMS_TO_TICKS(100)); // 10 FPS UI refresh
+        // Refresh rate: 250ms when logging, 400ms when in standby (prevents visual jumping/flicker)
+        vTaskDelay(pdMS_TO_TICKS(g_sys_state.is_logging ? 250 : 400));
     }
 }
 
@@ -406,6 +410,15 @@ static void usb_cli_task(void *pvParameters) {
                        (unsigned long)g_sys_state.records_written,
                        g_sys_state.is_zeroed ? 1 : 0,
                        g_sys_state.sd_mounted ? "MOUNTED" : "NO_SD");
+            } else if (strcmp(line, "I2C_SCAN") == 0) {
+                extern i2c_master_bus_handle_t g_i2c_bus_handle;
+                printf("Scanning I2C bus...\n");
+                for (uint8_t addr = 1; addr < 127; addr++) {
+                    if (i2c_master_probe(g_i2c_bus_handle, addr, 50) == ESP_OK) {
+                        printf(" - Found I2C device at 0x%02X\n", addr);
+                    }
+                }
+                printf("I2C scan complete.\n");
             } else if (strcmp(line, "DIAG") == 0) {
                 sd_logger_diag();
             } else if (strcmp(line, "MOUNT") == 0) {
@@ -427,6 +440,27 @@ static void usb_cli_task(void *pvParameters) {
                 g_sys_state.is_zeroed = false;
                 g_sys_state.zero_popup_timer = 20;
                 printf("OK: ZERO CLEARED\n");
+            } else if (strcmp(line, "START") == 0) {
+                if (!g_sys_state.is_logging) {
+                    if (!sd_logger_is_ready()) {
+                        sd_logger_init();
+                    }
+                    if (sd_logger_is_ready()) {
+                        sd_logger_start_session();
+                        printf("OK: LOGGING STARTED\n");
+                    } else {
+                        printf("ERROR: SD NOT READY\n");
+                    }
+                } else {
+                    printf("WARN: ALREADY LOGGING\n");
+                }
+            } else if (strcmp(line, "STOP") == 0) {
+                if (g_sys_state.is_logging) {
+                    sd_logger_stop_session();
+                    printf("OK: LOGGING STOPPED\n");
+                } else {
+                    printf("WARN: NOT LOGGING\n");
+                }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(100));

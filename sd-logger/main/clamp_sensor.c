@@ -10,7 +10,7 @@
 
 static const char *TAG = "LEM_SENSORS";
 
-extern adc_oneshot_unit_handle_t g_adc1_handle;
+adc_oneshot_unit_handle_t g_adc1_handle = NULL;
 static adc_cali_handle_t s_cali_dhab_ch1 = NULL;
 static adc_cali_handle_t s_cali_dhab_ch2 = NULL;
 static adc_cali_handle_t s_cali_ho100 = NULL;

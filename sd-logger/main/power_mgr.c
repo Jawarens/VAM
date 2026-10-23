@@ -1,128 +1,112 @@
 #include "power_mgr.h"
 #include "config_pins.h"
+#include "driver/i2c_master.h"
 #include "esp_adc/adc_oneshot.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
 #include "esp_pm.h"
 #include "esp_log.h"
+#include <math.h>
 
 static const char *TAG = "POWER_MGR";
 
-adc_oneshot_unit_handle_t g_adc1_handle = NULL;
-static adc_cali_handle_t s_batt_cali = NULL;
+// Adafruit Feather ESP32-S3 has an onboard MAX17048 LiPo/Li-ion Fuel Gauge on I2C address 0x36
+#define MAX17048_I2C_ADDR       0x36
+#define MAX17048_REG_VCELL      0x02
+#define MAX17048_REG_SOC        0x04
+#define MAX17048_REG_MODE       0x06
+#define MAX17048_REG_VERSION    0x08
+#define MAX17048_REG_CRATE      0x16
 
-// Adafruit Feather ESP32-S3 has a 2:1 resistor divider (2x 100k) on GPIO 1 (A13)
-#define BATT_DIVIDER_RATIO      2.0f
-#define CRITICAL_BATT_CUTOFF_V  3.10f // Safe cutoff threshold before 18650 BMS cuts out
+extern i2c_master_bus_handle_t g_i2c_bus_handle;
+static i2c_master_dev_handle_t s_max17048_handle = NULL;
+static bool s_has_max17048 = false;
 
-// 18650 Li-ion Open Circuit Voltage (OCV) State-of-Charge (SoC) Curve
-static const struct {
-    float v;
-    float pct;
-} s_18650_soc_table[] = {
-    { 4.18f, 100.0f },
-    { 4.08f,  90.0f },
-    { 3.98f,  80.0f },
-    { 3.88f,  70.0f },
-    { 3.80f,  60.0f },
-    { 3.73f,  50.0f },
-    { 3.67f,  40.0f },
-    { 3.61f,  30.0f },
-    { 3.53f,  20.0f },
-    { 3.40f,  10.0f },
-    { 3.25f,   5.0f },
-    { 3.00f,   0.0f }
-};
-#define SOC_TABLE_SIZE (sizeof(s_18650_soc_table) / sizeof(s_18650_soc_table[0]))
+// Safe cutoff threshold before 18650 BMS cuts out
+#define CRITICAL_BATT_CUTOFF_V  3.10f
 
-static float s_vbat_filtered = -1.0f;
+static esp_err_t max17048_read_reg16(uint8_t reg, uint16_t *val) {
+    if (!s_max17048_handle) return ESP_ERR_INVALID_STATE;
+    uint8_t rx[2];
+    esp_err_t err = i2c_master_transmit_receive(s_max17048_handle, &reg, 1, rx, 2, 50);
+    if (err == ESP_OK) {
+        *val = ((uint16_t)rx[0] << 8) | rx[1];
+    }
+    return err;
+}
 
 esp_err_t power_mgr_init(void) {
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    esp_err_t ret = adc_oneshot_new_unit(&init_config1, &g_adc1_handle);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "Battery ADC init failed: %s", esp_err_to_name(ret));
-        return ret;
+    s_has_max17048 = false;
+
+    if (g_i2c_bus_handle) {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = MAX17048_I2C_ADDR,
+            .scl_speed_hz = I2C_FREQ_HZ,
+        };
+        esp_err_t ret = i2c_master_bus_add_device(g_i2c_bus_handle, &dev_cfg, &s_max17048_handle);
+        if (ret == ESP_OK) {
+            uint16_t ver = 0;
+            if (max17048_read_reg16(MAX17048_REG_VERSION, &ver) == ESP_OK && ver != 0xFFFF && ver != 0x0000) {
+                s_has_max17048 = true;
+                ESP_LOGI(TAG, "MAX17048 Li-ion Fuel Gauge initialized at 0x36 (Version: 0x%04X)", ver);
+            } else {
+                ESP_LOGW(TAG, "MAX17048 device attached at 0x36, but version read 0x%04X", ver);
+                s_has_max17048 = true; // Still attempt to read
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to register MAX17048 I2C device: %s", esp_err_to_name(ret));
+        }
     }
 
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-        .atten = ADC_ATTEN_DB_12,
-    };
-    adc_oneshot_config_channel(g_adc1_handle, PIN_BATTERY_ADC, &config);
-
-    adc_cali_curve_fitting_config_t cali_config = {
-        .unit_id = ADC_UNIT_1,
-        .chan = PIN_BATTERY_ADC,
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_DEFAULT,
-    };
-    adc_cali_create_scheme_curve_fitting(&cali_config, &s_batt_cali);
-
-    ESP_LOGI(TAG, "Power Manager initialized (18650 Li-ion Curve, Cutoff: %.2fV)", CRITICAL_BATT_CUTOFF_V);
+    ESP_LOGI(TAG, "Power Manager initialized (Cutoff: %.2fV, FuelGauge: %s)",
+             CRITICAL_BATT_CUTOFF_V, s_has_max17048 ? "ONLINE" : "OFFLINE");
     return ESP_OK;
 }
 
 esp_err_t power_mgr_read_battery(battery_status_t *status) {
-    if (!status || !g_adc1_handle) return ESP_ERR_INVALID_STATE;
+    if (!status) return ESP_ERR_INVALID_STATE;
 
-    int raw = 0, voltage_mv = 0;
-    adc_oneshot_read(g_adc1_handle, PIN_BATTERY_ADC, &raw);
-    if (s_batt_cali) {
-        adc_cali_raw_to_voltage(s_batt_cali, raw, &voltage_mv);
-    } else {
-        voltage_mv = (raw * 3300) / 4095;
-    }
+    if (s_has_max17048 && s_max17048_handle) {
+        uint16_t raw_vcell = 0, raw_soc = 0, raw_crate = 0;
+        if (max17048_read_reg16(MAX17048_REG_VCELL, &raw_vcell) == ESP_OK) {
+            // MAX17048 VCELL: 78.125 µV per LSB (16-bit)
+            float vcell = (float)raw_vcell * 0.000078125f;
+            status->battery_voltage_v = vcell;
 
-    float raw_vbat = ((float)voltage_mv * BATT_DIVIDER_RATIO) / 1000.0f;
-
-    // Exponential Moving Average filter (EMA) to prevent flickering digits
-    if (s_vbat_filtered < 0.0f) {
-        s_vbat_filtered = raw_vbat;
-    } else {
-        s_vbat_filtered = (s_vbat_filtered * 0.85f) + (raw_vbat * 0.15f);
-    }
-
-    float vbat = s_vbat_filtered;
-    status->battery_voltage_v = vbat;
-
-    // Check if battery is present: When no battery is plugged into JST, VBAT floats around 0.5V - 1.8V
-    if (vbat < 2.50f) {
-        status->state_of_charge_pct = 0;
-        status->is_charging = false;
-        status->is_critical_low = false;
-        return ESP_OK;
-    }
-
-    // Charging detection (USB charging usually pulls 1S cell to 4.22V+)
-    status->is_charging = (vbat >= 4.22f);
-
-    // Calculate SoC % using 18650 Li-ion piece-wise linear interpolation curve
-    if (vbat >= s_18650_soc_table[0].v) {
-        status->state_of_charge_pct = 100;
-    } else if (vbat <= s_18650_soc_table[SOC_TABLE_SIZE - 1].v) {
-        status->state_of_charge_pct = 0;
-    } else {
-        float pct = 0.0f;
-        for (int i = 0; i < SOC_TABLE_SIZE - 1; i++) {
-            if (vbat <= s_18650_soc_table[i].v && vbat >= s_18650_soc_table[i + 1].v) {
-                float v_high = s_18650_soc_table[i].v;
-                float v_low  = s_18650_soc_table[i + 1].v;
-                float p_high = s_18650_soc_table[i].pct;
-                float p_low  = s_18650_soc_table[i + 1].pct;
-                pct = p_low + ((vbat - v_low) / (v_high - v_low)) * (p_high - p_low);
-                break;
+            if (max17048_read_reg16(MAX17048_REG_SOC, &raw_soc) == ESP_OK) {
+                // MAX17048 SOC: high byte is %, low byte is 1/256%
+                float soc_f = (float)raw_soc / 256.0f;
+                if (soc_f > 100.0f) soc_f = 100.0f;
+                if (soc_f < 0.0f) soc_f = 0.0f;
+                status->state_of_charge_pct = (uint8_t)(soc_f + 0.5f);
+            } else {
+                status->state_of_charge_pct = 0;
             }
+
+            if (max17048_read_reg16(MAX17048_REG_CRATE, &raw_crate) == ESP_OK) {
+                int16_t crate = (int16_t)raw_crate;
+                status->is_charging = (crate > 5); // Positive charge rate
+            } else {
+                status->is_charging = (vcell >= 4.22f);
+            }
+
+            // If cell voltage is under 2.50V, no battery is connected to JST
+            if (vcell < 2.50f) {
+                status->battery_voltage_v = 0.0f;
+                status->state_of_charge_pct = 0;
+                status->is_charging = false;
+                status->is_critical_low = false;
+            } else {
+                status->is_critical_low = (vcell <= CRITICAL_BATT_CUTOFF_V);
+            }
+            return ESP_OK;
         }
-        status->state_of_charge_pct = (uint8_t)(pct + 0.5f);
     }
 
-    // Critical low check (BMS under-voltage protection alert)
-    status->is_critical_low = (vbat <= CRITICAL_BATT_CUTOFF_V && vbat >= 2.50f);
-
+    // Fallback if fuel gauge read fails
+    status->battery_voltage_v = 0.0f;
+    status->state_of_charge_pct = 0;
+    status->is_charging = false;
+    status->is_critical_low = false;
     return ESP_OK;
 }
 

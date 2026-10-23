@@ -38,7 +38,7 @@ esp_err_t sd_logger_init(void) {
     // Create the queue and background writer task regardless of initial SD mount status
     if (!s_record_queue) {
         s_record_queue = xQueueCreate(QUEUE_CAPACITY, sizeof(telemetry_record_t));
-        xTaskCreatePinnedToCore(sd_writer_task, "sd_writer", 4096, NULL, 4, NULL, 1);
+        xTaskCreatePinnedToCore(sd_writer_task, "sd_writer", 6144, NULL, 4, NULL, 1);
     }
 
     // Ensure MISO, MOSI and CS have internal pull-ups enabled for SPI SD integrity
