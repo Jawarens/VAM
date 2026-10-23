@@ -8,8 +8,10 @@ extern "C" {
 #endif
 
 typedef struct {
-    // DHAB S/157
-    float dhab_current_a;
+    // DHAB S/157 Dual-Range
+    float dhab_current_a;       // Auto-selected best range
+    float dhab_ch1_low_a;       // Channel 1: High Sensitivity (+/-50A nominal)
+    float dhab_ch2_high_a;      // Channel 2: High Current (+/-500A nominal)
     float dhab_ch1_v;
     float dhab_ch2_v;
     bool  dhab_high_range;

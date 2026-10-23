@@ -337,9 +337,10 @@ static void render_screen_overview(const system_state_t *state) {
              state->latest_telemetry.ina2_current_a);
     fb_draw_string_centered(120, 134, ina_str, C_CYAN, 1);
 
-    // LEM Hall Clamps line
+    // LEM Hall Clamps line (Shows DHAB range indicator L or H)
     char lem_str[48];
-    snprintf(lem_str, sizeof(lem_str), "DHAB:%+.1fA HO:%+.1fA",
+    snprintf(lem_str, sizeof(lem_str), "DH-%c:%+.1fA HO:%+.1fA",
+             state->latest_telemetry.dhab_in_high_range ? 'H' : 'L',
              state->latest_telemetry.dhab_current_a,
              state->latest_telemetry.ho100_current_a);
     fb_draw_string_centered(120, 150, lem_str, C_YELLOW, 1);
@@ -389,19 +390,28 @@ static void render_screen_ina(const system_state_t *state) {
 static void render_screen_lem(const system_state_t *state) {
     char buf[48];
 
-    fb_fill_rect(36, 70, 168, 50, C_CARD_BG);
-    fb_draw_string(42, 74, "LEM DHAB S/157:", C_YELLOW, 1);
-    snprintf(buf, sizeof(buf), "Curr: %+.2f A", state->latest_telemetry.dhab_current_a);
-    fb_draw_string(42, 86, buf, C_WHITE, 1);
-    snprintf(buf, sizeof(buf), "Range: %s", state->latest_telemetry.dhab_in_high_range ? "+/-500A" : "+/-50A");
-    fb_draw_string(42, 98, buf, C_CYAN, 1);
-    snprintf(buf, sizeof(buf), "Ch1:%.2fV Ch2:%.2fV",
+    fb_fill_rect(36, 68, 168, 56, C_CARD_BG);
+    fb_draw_string(42, 72, "LEM DHAB S/157 (Dual):", C_YELLOW, 1);
+
+    // Low Range (+/-50A High Sensitivity)
+    snprintf(buf, sizeof(buf), "Low (50A):  %+.2fA %s",
+             state->latest_telemetry.dhab_ch1_low_a,
+             !state->latest_telemetry.dhab_in_high_range ? "[ACT]" : "");
+    fb_draw_string(42, 84, buf, !state->latest_telemetry.dhab_in_high_range ? C_GREEN : C_WHITE, 1);
+
+    // High Range (+/-500A High Current)
+    snprintf(buf, sizeof(buf), "High(500A): %+.1fA %s",
+             state->latest_telemetry.dhab_ch2_high_a,
+             state->latest_telemetry.dhab_in_high_range ? "[ACT]" : "");
+    fb_draw_string(42, 96, buf, state->latest_telemetry.dhab_in_high_range ? C_GREEN : C_WHITE, 1);
+
+    snprintf(buf, sizeof(buf), "Ch1:%.2fV  Ch2:%.2fV",
              state->latest_telemetry.dhab_ch1_50a_raw_v,
              state->latest_telemetry.dhab_ch2_500a_raw_v);
     fb_draw_string(42, 108, buf, C_GRAY, 1);
 
     fb_fill_rect(36, 128, 168, 46, C_CARD_BG);
-    fb_draw_string(42, 132, "LEM HO-100-S (A5):", C_YELLOW, 1);
+    fb_draw_string(42, 132, "LEM HO-100-S (+/-100A):", C_YELLOW, 1);
     snprintf(buf, sizeof(buf), "Curr: %+.2f A", state->latest_telemetry.ho100_current_a);
     fb_draw_string(42, 144, buf, C_WHITE, 1);
     snprintf(buf, sizeof(buf), "Raw ADC: %.3f V", state->latest_telemetry.ho100_raw_v);

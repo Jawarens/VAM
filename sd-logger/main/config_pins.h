@@ -66,6 +66,8 @@ typedef struct {
 
     // Sensor 3: LEM DHAB S/157 Dual-Range Hall Sensor
     float    dhab_current_a;
+    float    dhab_ch1_low_a;        // Low range (+/-50A high sensitivity)
+    float    dhab_ch2_high_a;       // High range (+/-500A high current)
     float    dhab_ch1_50a_raw_v;
     float    dhab_ch2_500a_raw_v;
     bool     dhab_in_high_range;
@@ -107,6 +109,8 @@ typedef struct {
     float        ina1_zero_offset_a;
     float        ina2_zero_offset_a;
     float        dhab_zero_offset_a;
+    float        dhab_ch1_zero_offset_a;
+    float        dhab_ch2_zero_offset_a;
     float        ho100_zero_offset_a;
     int          zero_popup_timer; // Countdown for popup message (frames)
     

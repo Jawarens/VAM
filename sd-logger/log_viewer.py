@@ -1,6 +1,7 @@
 """
 VAM Multi-Channel Telemetry Logger - Log Viewer & Analysis Suite
 Supports:
+  - Multi-channel currents (INA1, INA2, DHAB Low/High ranges, HO-100-S, Total)
   - Interactive GUI with Matplotlib graphing & channel toggling
   - Excel (.xlsx) export with native embedded charts and Ah/Wh integration
   - Interactive HTML report (zoomable, pan, hover tooltips via Chart.js)
@@ -32,11 +33,23 @@ CHANNEL_INFO = {
         "power_col": "INA2_W",
         "color": "#ff7f0e"  # Orange
     },
+    "DHAB_LOW": {
+        "name": "LEM DHAB S/157 (Low Range)",
+        "desc": "High sensitivity channel (40 mV/A, +/-50A nominal) for high precision",
+        "current_col": "DHAB_Low_A",
+        "color": "#22c55e"  # Bright Green
+    },
+    "DHAB_HIGH": {
+        "name": "LEM DHAB S/157 (High Range)",
+        "desc": "High current channel (4 mV/A, +/-500A nominal) for heavy load / cranking",
+        "current_col": "DHAB_High_A",
+        "color": "#15803d"  # Forest Green
+    },
     "DHAB": {
-        "name": "LEM DHAB S/157 Hall Clamp",
-        "desc": "Galvanically isolated dual-channel automotive current clamp",
+        "name": "LEM DHAB S/157 (Auto-Selected)",
+        "desc": "Firmware auto-switched between Low (<42A) and High (>42A) ranges",
         "current_col": "DHAB_A",
-        "color": "#2ca02c"  # Green
+        "color": "#2ca02c"
     },
     "HO100": {
         "name": "LEM HO-100-S Hall Clamp",
@@ -71,13 +84,11 @@ def load_log_file(filepath):
         raise FileNotFoundError(f"File not found: {filepath}")
 
     df = pd.read_csv(filepath)
-    # Ensure standard column naming
     df.columns = [c.strip() for c in df.columns]
 
     # Convert timestamp
     if "Timestamp_ISO" in df.columns:
         df["DateTime"] = pd.to_datetime(df["Timestamp_ISO"], errors="coerce")
-        # Relative time in seconds from start
         if not df["DateTime"].isna().all():
             t0 = df["DateTime"].iloc[0]
             df["Time_Sec"] = (df["DateTime"] - t0).dt.total_seconds()
@@ -95,20 +106,18 @@ def compute_statistics(df):
     """Computes comprehensive statistics and energy metrics (Ah, Wh)."""
     stats = {}
     time_span_s = df["Time_Sec"].max() - df["Time_Sec"].min() if len(df) > 1 else 0
-    time_span_h = time_span_s / 3600.0
 
     stats["Duration_Sec"] = time_span_s
     stats["Duration_Str"] = str(datetime.timedelta(seconds=int(time_span_s)))
     stats["Total_Samples"] = len(df)
     stats["Sample_Rate_Hz"] = (len(df) / time_span_s) if time_span_s > 0 else 0
 
-    current_cols = ["INA1_A", "INA2_A", "DHAB_A", "HO100_A", "Total_Current_A"]
+    current_cols = ["INA1_A", "INA2_A", "DHAB_Low_A", "DHAB_High_A", "DHAB_A", "HO100_A", "Total_Current_A"]
     stats["Channels"] = {}
 
     for col in current_cols:
         if col in df.columns:
             s = df[col]
-            # Trapezoidal integration for Amp-hours (Ah)
             ah = np.trapezoid(s, df["Time_Sec"]) / 3600.0 if len(df) > 1 else 0.0
             stats["Channels"][col] = {
                 "min": s.min(),
@@ -139,7 +148,7 @@ def export_html_report(df, csv_path, output_html=None):
     stats = compute_statistics(df)
     filename = os.path.basename(csv_path)
 
-    # Downsample if log is very large (>5000 points) for buttery smooth browser rendering
+    # Downsample if log is very large (>4000 points) for fast browser rendering
     max_pts = 4000
     if len(df) > max_pts:
         step = int(np.ceil(len(df) / max_pts))
@@ -151,7 +160,9 @@ def export_html_report(df, csv_path, output_html=None):
     
     ina1_a = plot_df["INA1_A"].round(4).tolist() if "INA1_A" in plot_df else []
     ina2_a = plot_df["INA2_A"].round(4).tolist() if "INA2_A" in plot_df else []
-    dhab_a = plot_df["DHAB_A"].round(4).tolist() if "DHAB_A" in plot_df else []
+    dhab_low = plot_df["DHAB_Low_A"].round(4).tolist() if "DHAB_Low_A" in plot_df else []
+    dhab_high = plot_df["DHAB_High_A"].round(4).tolist() if "DHAB_High_A" in plot_df else []
+    dhab_comb = plot_df["DHAB_A"].round(4).tolist() if "DHAB_A" in plot_df else []
     ho100_a = plot_df["HO100_A"].round(4).tolist() if "HO100_A" in plot_df else []
     tot_a = plot_df["Total_Current_A"].round(4).tolist() if "Total_Current_A" in plot_df else []
 
@@ -309,7 +320,7 @@ def export_html_report(df, csv_path, output_html=None):
             <div class="sub">{stats['Total_Samples']} samples @ {stats['Sample_Rate_Hz']:.1f} Hz</div>
         </div>
         <div class="kpi-card">
-            <div class="label">Max Current</div>
+            <div class="label">Max System Current</div>
             <div class="value" style="color: var(--accent-yellow);">{stats['Channels'].get('Total_Current_A', {}).get('max', 0):.2f} A</div>
             <div class="sub">Min: {stats['Channels'].get('Total_Current_A', {}).get('min', 0):.2f} A</div>
         </div>
@@ -342,11 +353,15 @@ def export_html_report(df, csv_path, output_html=None):
         </div>
         <div class="module-item">
             <span class="dot" style="background: #4ade80;"></span>
-            <strong>DHAB S/157:</strong> LEM Dual-Range Hall Clamp
+            <strong>DHAB Low (±50A):</strong> High Sensitivity Channel (40mV/A)
+        </div>
+        <div class="module-item">
+            <span class="dot" style="background: #15803d;"></span>
+            <strong>DHAB High (±500A):</strong> High Current Channel (4mV/A)
         </div>
         <div class="module-item">
             <span class="dot" style="background: #f87171;"></span>
-            <strong>HO-100-S:</strong> LEM Fast Hall Clamp (+/-100A)
+            <strong>HO-100-S:</strong> Fast Hall Clamp (±100A)
         </div>
         <div class="module-item">
             <span class="dot" style="background: #c084fc;"></span>
@@ -358,7 +373,7 @@ def export_html_report(df, csv_path, output_html=None):
     <div class="chart-box">
         <div class="chart-header">
             <h2>📈 Multi-Channel Currents (Amperes)</h2>
-            <small style="color: var(--text-dim);">Click any legend label to toggle channels ON/OFF</small>
+            <small style="color: var(--text-dim);">Click any legend item to toggle channels ON/OFF</small>
         </div>
         <canvas id="currentChart"></canvas>
     </div>
@@ -393,7 +408,8 @@ def export_html_report(df, csv_path, output_html=None):
                     {{ label: 'Total Current (A)', data: {tot_a}, borderColor: '#c084fc', backgroundColor: 'rgba(192, 132, 252, 0.1)', borderWidth: 2.5, pointRadius: 0 }},
                     {{ label: 'INA1 Shunt (A)', data: {ina1_a}, borderColor: '#38bdf8', borderWidth: 1.5, pointRadius: 0 }},
                     {{ label: 'INA2 Shunt (A)', data: {ina2_a}, borderColor: '#fb923c', borderWidth: 1.5, pointRadius: 0 }},
-                    {{ label: 'DHAB Clamp (A)', data: {dhab_a}, borderColor: '#4ade80', borderWidth: 1.5, pointRadius: 0 }},
+                    {{ label: 'DHAB Low (±50A)', data: {dhab_low if dhab_low else dhab_comb}, borderColor: '#4ade80', borderWidth: 1.5, pointRadius: 0 }},
+                    {{ label: 'DHAB High (±500A)', data: {dhab_high}, borderColor: '#15803d', borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0 }},
                     {{ label: 'HO100 Clamp (A)', data: {ho100_a}, borderColor: '#f87171', borderWidth: 1.5, pointRadius: 0 }}
                 ]
             }},
@@ -512,7 +528,9 @@ def export_excel_report(df, csv_path, output_xlsx=None):
     guide_rows = [
         ("INA1_A, INA1_V, INA1_W", "INA228 Shunt #1 (0x40)", "Primary Bus Voltage & Shunt Current", "0-85V, Bidirectional"),
         ("INA2_A, INA2_V, INA2_W", "INA228 Shunt #2 (0x41)", "Secondary Bus Voltage & Current", "0-85V, Bidirectional"),
-        ("DHAB_A", "LEM DHAB S/157 Hall Clamp", "Dual-Range Galvanically Isolated Current", "Automotive Hall Sensor"),
+        ("DHAB_Low_A", "LEM DHAB S/157 (Low Range)", "Channel 1 High-Sensitivity Current", "+/- 50A (40 mV/A)"),
+        ("DHAB_High_A", "LEM DHAB S/157 (High Range)", "Channel 2 High-Current Range", "+/- 500A (4 mV/A)"),
+        ("DHAB_A", "LEM DHAB Combined", "Firmware Auto-Selected Best Range", "Seamless 0-500A"),
         ("HO100_A", "LEM HO-100-S Hall Clamp", "High-Speed Open Loop Hall Current", "+/- 100A Peak"),
         ("Total_Current_A", "Calculated Total Load", "Sum of Monitored Sensor Channels", "System Aggregate"),
         ("Total_Power_W", "Calculated Power", "System Power Draw", "Watts (W)"),
@@ -534,7 +552,7 @@ def export_excel_report(df, csv_path, output_xlsx=None):
         c.fill = PatternFill(start_color="334155", end_color="334155", fill_type="solid")
 
     # Add Native Current Chart in Excel
-    num_rows = min(len(df) + 1, 1000) # Plot up to 1000 pts directly in Excel
+    num_rows = min(len(df) + 1, 1000)
     chart_current = LineChart()
     chart_current.title = "Current Waveforms (Amps)"
     chart_current.style = 13
@@ -543,22 +561,12 @@ def export_excel_report(df, csv_path, output_xlsx=None):
     chart_current.width = 18
     chart_current.height = 10
 
-    # Locate column indices for Total_Current_A, INA1_A, INA2_A, DHAB_A, HO100_A
     col_names = list(df.columns)
-    if "Total_Current_A" in col_names:
-        c_idx = col_names.index("Total_Current_A") + 1
-        data_ref = Reference(ws_data, min_col=c_idx, min_row=1, max_row=num_rows)
-        chart_current.add_data(data_ref, titles_from_data=True)
-
-    if "INA1_A" in col_names:
-        c_idx = col_names.index("INA1_A") + 1
-        data_ref = Reference(ws_data, min_col=c_idx, min_row=1, max_row=num_rows)
-        chart_current.add_data(data_ref, titles_from_data=True)
-
-    if "HO100_A" in col_names:
-        c_idx = col_names.index("HO100_A") + 1
-        data_ref = Reference(ws_data, min_col=c_idx, min_row=1, max_row=num_rows)
-        chart_current.add_data(data_ref, titles_from_data=True)
+    for c_target in ["Total_Current_A", "INA1_A", "DHAB_Low_A", "DHAB_High_A", "HO100_A"]:
+        if c_target in col_names:
+            c_idx = col_names.index(c_target) + 1
+            data_ref = Reference(ws_data, min_col=c_idx, min_row=1, max_row=num_rows)
+            chart_current.add_data(data_ref, titles_from_data=True)
 
     ws_summary.add_chart(chart_current, "F5")
 
@@ -637,7 +645,11 @@ def launch_gui_viewer(csv_path=None):
             ax_curr.plot(t, df["INA1_A"], label="INA1 Shunt", color="#38bdf8", linewidth=1.4)
         if "INA2_A" in df:
             ax_curr.plot(t, df["INA2_A"], label="INA2 Shunt", color="#fb923c", linewidth=1.4)
-        if "DHAB_A" in df:
+        if "DHAB_Low_A" in df:
+            ax_curr.plot(t, df["DHAB_Low_A"], label="DHAB Low (±50A)", color="#4ade80", linewidth=1.4)
+        if "DHAB_High_A" in df:
+            ax_curr.plot(t, df["DHAB_High_A"], label="DHAB High (±500A)", color="#15803d", linewidth=1.4, linestyle=":")
+        elif "DHAB_A" in df:
             ax_curr.plot(t, df["DHAB_A"], label="DHAB Clamp", color="#4ade80", linewidth=1.4)
         if "HO100_A" in df:
             ax_curr.plot(t, df["HO100_A"], label="HO100 Clamp", color="#f87171", linewidth=1.4)
@@ -716,7 +728,6 @@ if __name__ == "__main__":
     parser.add_argument("--excel", action="store_true", help="Generate Excel report and exit")
     args = parser.parse_args()
 
-    # Default to newest log in ./logs if none specified
     target_file = args.file
     if not target_file:
         logs_dir = os.path.join(os.path.dirname(__file__), "logs")
@@ -736,5 +747,4 @@ if __name__ == "__main__":
             print(f"Excel ready: {out}")
             sys.exit(0)
 
-    # Otherwise launch interactive GUI viewer
     launch_gui_viewer(target_file)

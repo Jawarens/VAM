@@ -110,6 +110,9 @@ esp_err_t lem_sensors_read_all(lem_sensors_data_t *data) {
     float curr_dhab1 = ((float)v1 - s_zero_dhab_ch1_mv) / sens_dhab1;
     float curr_dhab2 = ((float)v2 - s_zero_dhab_ch2_mv) / sens_dhab2;
 
+    data->dhab_ch1_low_a = curr_dhab1;
+    data->dhab_ch2_high_a = curr_dhab2;
+
     if (fabsf(curr_dhab1) <= 42.0f) {
         data->dhab_current_a = curr_dhab1;
         data->dhab_high_range = false;

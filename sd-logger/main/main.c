@@ -187,10 +187,12 @@ static void telemetry_sampler_task(void *pvParameters) {
         }
 
         // 3. Sample LEM DHAB S/157 + LEM HO-100-S
-        float raw_dhab_a = 0.0f, raw_ho100_a = 0.0f;
+        float raw_dhab_a = 0.0f, raw_dhab_ch1_a = 0.0f, raw_dhab_ch2_a = 0.0f, raw_ho100_a = 0.0f;
         lem_sensors_data_t lem;
         if (lem_sensors_read_all(&lem) == ESP_OK) {
             raw_dhab_a = lem.dhab_current_a;
+            raw_dhab_ch1_a = lem.dhab_ch1_low_a;
+            raw_dhab_ch2_a = lem.dhab_ch2_high_a;
             raw_ho100_a = lem.ho100_current_a;
             rec.dhab_ch1_50a_raw_v = lem.dhab_ch1_v;
             rec.dhab_ch2_500a_raw_v = lem.dhab_ch2_v;
@@ -203,11 +205,15 @@ static void telemetry_sampler_task(void *pvParameters) {
             rec.ina1_current_a = raw_ina1_a - g_sys_state.ina1_zero_offset_a;
             rec.ina2_current_a = raw_ina2_a - g_sys_state.ina2_zero_offset_a;
             rec.dhab_current_a = raw_dhab_a - g_sys_state.dhab_zero_offset_a;
+            rec.dhab_ch1_low_a = raw_dhab_ch1_a - g_sys_state.dhab_ch1_zero_offset_a;
+            rec.dhab_ch2_high_a = raw_dhab_ch2_a - g_sys_state.dhab_ch2_zero_offset_a;
             rec.ho100_current_a = raw_ho100_a - g_sys_state.ho100_zero_offset_a;
         } else {
             rec.ina1_current_a = raw_ina1_a;
             rec.ina2_current_a = raw_ina2_a;
             rec.dhab_current_a = raw_dhab_a;
+            rec.dhab_ch1_low_a = raw_dhab_ch1_a;
+            rec.dhab_ch2_high_a = raw_dhab_ch2_a;
             rec.ho100_current_a = raw_ho100_a;
         }
 
@@ -294,17 +300,22 @@ static void button_task(void *pvParameters) {
                     g_sys_state.ina1_zero_offset_a = g_sys_state.latest_telemetry.ina1_current_a + g_sys_state.ina1_zero_offset_a;
                     g_sys_state.ina2_zero_offset_a = g_sys_state.latest_telemetry.ina2_current_a + g_sys_state.ina2_zero_offset_a;
                     g_sys_state.dhab_zero_offset_a = g_sys_state.latest_telemetry.dhab_current_a + g_sys_state.dhab_zero_offset_a;
+                    g_sys_state.dhab_ch1_zero_offset_a = g_sys_state.latest_telemetry.dhab_ch1_low_a + g_sys_state.dhab_ch1_zero_offset_a;
+                    g_sys_state.dhab_ch2_zero_offset_a = g_sys_state.latest_telemetry.dhab_ch2_high_a + g_sys_state.dhab_ch2_zero_offset_a;
                     g_sys_state.ho100_zero_offset_a = g_sys_state.latest_telemetry.ho100_current_a + g_sys_state.ho100_zero_offset_a;
                     g_sys_state.is_zeroed = true;
                     g_sys_state.zero_popup_timer = 20; // 2 seconds
-                    ESP_LOGI(TAG, "[ZERO/TARE] Set Offsets: INA1=%.3fA, INA2=%.3fA, DHAB=%.2fA, HO100=%.2fA",
+                    ESP_LOGI(TAG, "[ZERO/TARE] Set Offsets: INA1=%.3fA, INA2=%.3fA, DHAB_L=%.2fA, DHAB_H=%.2fA, HO100=%.2fA",
                              g_sys_state.ina1_zero_offset_a, g_sys_state.ina2_zero_offset_a,
-                             g_sys_state.dhab_zero_offset_a, g_sys_state.ho100_zero_offset_a);
+                             g_sys_state.dhab_ch1_zero_offset_a, g_sys_state.dhab_ch2_zero_offset_a,
+                             g_sys_state.ho100_zero_offset_a);
                 } else {
                     // Reset Tare
                     g_sys_state.ina1_zero_offset_a = 0.0f;
                     g_sys_state.ina2_zero_offset_a = 0.0f;
                     g_sys_state.dhab_zero_offset_a = 0.0f;
+                    g_sys_state.dhab_ch1_zero_offset_a = 0.0f;
+                    g_sys_state.dhab_ch2_zero_offset_a = 0.0f;
                     g_sys_state.ho100_zero_offset_a = 0.0f;
                     g_sys_state.is_zeroed = false;
                     g_sys_state.zero_popup_timer = 20;
@@ -396,13 +407,14 @@ static void usb_cli_task(void *pvParameters) {
                     printf("<FILE_DATA_END:%s>\n", fname);
                 }
             } else if (strcmp(line, "STATUS") == 0) {
-                printf("STATUS: Total_I=%.2fA, INA1=(%.2fV, %.3fA), INA2=(%.2fV, %.3fA), DHAB=%.2fA, HO100=%.2fA, P=%.1fW, Batt=%.2fV(%u%%), Recs=%lu, Zeroed=%d, SD=%s\n",
+                printf("STATUS: Total_I=%.2fA, INA1=(%.2fV, %.3fA), INA2=(%.2fV, %.3fA), DHAB_L=%.2fA, DHAB_H=%.2fA, HO100=%.2fA, P=%.1fW, Batt=%.2fV(%u%%), Recs=%lu, Zeroed=%d, SD=%s\n",
                        g_sys_state.latest_telemetry.total_system_current_a,
                        g_sys_state.latest_telemetry.ina1_bus_voltage_v,
                        g_sys_state.latest_telemetry.ina1_current_a,
                        g_sys_state.latest_telemetry.ina2_bus_voltage_v,
                        g_sys_state.latest_telemetry.ina2_current_a,
-                       g_sys_state.latest_telemetry.dhab_current_a,
+                       g_sys_state.latest_telemetry.dhab_ch1_low_a,
+                       g_sys_state.latest_telemetry.dhab_ch2_high_a,
                        g_sys_state.latest_telemetry.ho100_current_a,
                        g_sys_state.latest_telemetry.total_power_w,
                        g_sys_state.latest_telemetry.battery_v,
@@ -428,6 +440,8 @@ static void usb_cli_task(void *pvParameters) {
                 g_sys_state.ina1_zero_offset_a = g_sys_state.latest_telemetry.ina1_current_a + g_sys_state.ina1_zero_offset_a;
                 g_sys_state.ina2_zero_offset_a = g_sys_state.latest_telemetry.ina2_current_a + g_sys_state.ina2_zero_offset_a;
                 g_sys_state.dhab_zero_offset_a = g_sys_state.latest_telemetry.dhab_current_a + g_sys_state.dhab_zero_offset_a;
+                g_sys_state.dhab_ch1_zero_offset_a = g_sys_state.latest_telemetry.dhab_ch1_low_a + g_sys_state.dhab_ch1_zero_offset_a;
+                g_sys_state.dhab_ch2_zero_offset_a = g_sys_state.latest_telemetry.dhab_ch2_high_a + g_sys_state.dhab_ch2_zero_offset_a;
                 g_sys_state.ho100_zero_offset_a = g_sys_state.latest_telemetry.ho100_current_a + g_sys_state.ho100_zero_offset_a;
                 g_sys_state.is_zeroed = true;
                 g_sys_state.zero_popup_timer = 20;
@@ -436,6 +450,8 @@ static void usb_cli_task(void *pvParameters) {
                 g_sys_state.ina1_zero_offset_a = 0.0f;
                 g_sys_state.ina2_zero_offset_a = 0.0f;
                 g_sys_state.dhab_zero_offset_a = 0.0f;
+                g_sys_state.dhab_ch1_zero_offset_a = 0.0f;
+                g_sys_state.dhab_ch2_zero_offset_a = 0.0f;
                 g_sys_state.ho100_zero_offset_a = 0.0f;
                 g_sys_state.is_zeroed = false;
                 g_sys_state.zero_popup_timer = 20;

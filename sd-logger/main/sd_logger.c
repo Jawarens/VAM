@@ -117,8 +117,8 @@ esp_err_t sd_logger_start_session(void) {
         return ESP_FAIL;
     }
 
-    // Write Multi-Channel CSV Header
-    const char *header = "Timestamp_ISO,Unix_ms,Sample_Idx,INA1_V,INA1_A,INA1_W,INA2_V,INA2_A,INA2_W,DHAB_A,HO100_A,Total_Current_A,Total_Power_W,Batt_V,Batt_Pct\n";
+    // Write Multi-Channel CSV Header with Dual DHAB Ranges
+    const char *header = "Timestamp_ISO,Unix_ms,Sample_Idx,INA1_V,INA1_A,INA1_W,INA2_V,INA2_A,INA2_W,DHAB_Low_A,DHAB_High_A,DHAB_A,HO100_A,Total_Current_A,Total_Power_W,Batt_V,Batt_Pct\n";
     fwrite(header, 1, strlen(header), s_log_file);
     fflush(s_log_file);
 
@@ -173,7 +173,7 @@ static void sd_writer_task(void *pvParameters) {
         if (xQueueReceive(s_record_queue, &rec, pdMS_TO_TICKS(50)) == pdTRUE) {
             if (s_log_file && s_is_logging) {
                 int len = snprintf(line_buf, sizeof(line_buf),
-                                   "%s,%lld,%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%u\n",
+                                   "%s,%lld,%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%u\n",
                                    rec.timestamp_iso,
                                    (long long)rec.timestamp_unix_ms,
                                    (unsigned long)rec.sample_idx,
@@ -183,6 +183,8 @@ static void sd_writer_task(void *pvParameters) {
                                    rec.ina2_bus_voltage_v,
                                    rec.ina2_current_a,
                                    rec.ina2_power_w,
+                                   rec.dhab_ch1_low_a,
+                                   rec.dhab_ch2_high_a,
                                    rec.dhab_current_a,
                                    rec.ho100_current_a,
                                    rec.total_system_current_a,
