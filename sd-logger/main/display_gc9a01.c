@@ -197,6 +197,17 @@ static void fb_draw_circle_arc(int cx, int cy, int r_out, int r_in, uint16_t col
     }
 }
 
+static void fb_draw_rect(int x, int y, int w, int h, uint16_t color) {
+    for (int i = x; i < x + w; i++) {
+        fb_set_pixel(i, y, color);
+        fb_set_pixel(i, y + h - 1, color);
+    }
+    for (int j = y; j < y + h; j++) {
+        fb_set_pixel(x, j, color);
+        fb_set_pixel(x + w - 1, j, color);
+    }
+}
+
 static void fb_fill_rect(int x, int y, int w, int h, uint16_t color) {
     for (int i = x; i < x + w; i++) {
         for (int j = y; j < y + h; j++) {
@@ -328,6 +339,29 @@ static void render_screen_overview(const system_state_t *state) {
         snprintf(sd_str, sizeof(sd_str), "SD:NO CARD / ERR");
     }
     fb_draw_string_centered(120, 172, sd_str, state->sd_mounted ? C_GREEN : C_ORANGE, 1);
+
+    // 18650 Battery Bank Indicator & % (Bottom of Overview Screen)
+    float vbat = state->latest_telemetry.battery_v;
+    uint8_t pct = state->latest_telemetry.battery_pct;
+
+    if (vbat >= 2.50f) {
+        int bx = 70, by = 192;
+        fb_draw_rect(bx, by, 22, 12, C_WHITE);
+        fb_fill_rect(bx + 22, by + 3, 3, 6, C_WHITE); // Positive nub
+
+        int fill_w = (pct * 18) / 100;
+        if (fill_w > 18) fill_w = 18;
+        uint16_t fill_color = (pct > 50) ? C_GREEN : ((pct >= 20) ? C_YELLOW : C_RED);
+        if (fill_w > 0) {
+            fb_fill_rect(bx + 2, by + 2, fill_w, 8, fill_color);
+        }
+
+        char batt_str[32];
+        snprintf(batt_str, sizeof(batt_str), "%.2fV %u%%", vbat, pct);
+        fb_draw_string(bx + 31, by + 3, batt_str, C_WHITE, 1);
+    } else {
+        fb_draw_string_centered(120, 194, "[USB POWER]", C_CYAN, 1);
+    }
 }
 
 static void render_screen_ina(const system_state_t *state) {
@@ -390,9 +424,13 @@ static void render_screen_system(const system_state_t *state) {
     fb_fill_rect(36, 70, 168, 104, C_CARD_BG);
     fb_draw_string_centered(120, 74, "SYSTEM STATUS", C_YELLOW, 1);
 
-    snprintf(buf, sizeof(buf), "Batt: %.2fV (%u%%)",
-             state->latest_telemetry.battery_v, state->latest_telemetry.battery_pct);
-    fb_draw_string(42, 90, buf, state->latest_telemetry.battery_pct > 20 ? C_GREEN : C_RED, 1);
+    if (state->latest_telemetry.battery_v >= 2.50f) {
+        snprintf(buf, sizeof(buf), "18650: %.2fV (%u%%)",
+                 state->latest_telemetry.battery_v, state->latest_telemetry.battery_pct);
+        fb_draw_string(42, 90, buf, state->latest_telemetry.battery_pct > 20 ? C_GREEN : C_RED, 1);
+    } else {
+        fb_draw_string(42, 90, "18650: USB POWER", C_CYAN, 1);
+    }
 
     snprintf(buf, sizeof(buf), "SD: %s", state->sd_mounted ? "MOUNTED (FAT32)" : "NOT MOUNTED");
     fb_draw_string(42, 104, buf, state->sd_mounted ? C_GREEN : C_ORANGE, 1);

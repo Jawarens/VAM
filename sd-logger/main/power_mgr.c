@@ -13,7 +13,29 @@ static adc_cali_handle_t s_batt_cali = NULL;
 
 // Adafruit Feather ESP32-S3 has a 2:1 resistor divider (2x 100k) on GPIO 1 (A13)
 #define BATT_DIVIDER_RATIO      2.0f
-#define CRITICAL_BATT_CUTOFF_V  3.25f // Safe shutdown threshold before LiPo brownout
+#define CRITICAL_BATT_CUTOFF_V  3.10f // Safe cutoff threshold before 18650 BMS cuts out
+
+// 18650 Li-ion Open Circuit Voltage (OCV) State-of-Charge (SoC) Curve
+static const struct {
+    float v;
+    float pct;
+} s_18650_soc_table[] = {
+    { 4.18f, 100.0f },
+    { 4.08f,  90.0f },
+    { 3.98f,  80.0f },
+    { 3.88f,  70.0f },
+    { 3.80f,  60.0f },
+    { 3.73f,  50.0f },
+    { 3.67f,  40.0f },
+    { 3.61f,  30.0f },
+    { 3.53f,  20.0f },
+    { 3.40f,  10.0f },
+    { 3.25f,   5.0f },
+    { 3.00f,   0.0f }
+};
+#define SOC_TABLE_SIZE (sizeof(s_18650_soc_table) / sizeof(s_18650_soc_table[0]))
+
+static float s_vbat_filtered = -1.0f;
 
 esp_err_t power_mgr_init(void) {
     adc_oneshot_unit_init_cfg_t init_config1 = {
@@ -40,7 +62,7 @@ esp_err_t power_mgr_init(void) {
     };
     adc_cali_create_scheme_curve_fitting(&cali_config, &s_batt_cali);
 
-    ESP_LOGI(TAG, "Power Manager initialized (Cutoff: %.2fV)", CRITICAL_BATT_CUTOFF_V);
+    ESP_LOGI(TAG, "Power Manager initialized (18650 Li-ion Curve, Cutoff: %.2fV)", CRITICAL_BATT_CUTOFF_V);
     return ESP_OK;
 }
 
@@ -55,20 +77,51 @@ esp_err_t power_mgr_read_battery(battery_status_t *status) {
         voltage_mv = (raw * 3300) / 4095;
     }
 
-    float vbat = ((float)voltage_mv * BATT_DIVIDER_RATIO) / 1000.0f;
-    status->battery_voltage_v = vbat;
+    float raw_vbat = ((float)voltage_mv * BATT_DIVIDER_RATIO) / 1000.0f;
 
-    // LiPo SoC curve approximation (3.2V = 0%, 4.2V = 100%)
-    if (vbat >= 4.20f) {
-        status->state_of_charge_pct = 100;
-    } else if (vbat <= 3.20f) {
-        status->state_of_charge_pct = 0;
+    // Exponential Moving Average filter (EMA) to prevent flickering digits
+    if (s_vbat_filtered < 0.0f) {
+        s_vbat_filtered = raw_vbat;
     } else {
-        status->state_of_charge_pct = (uint8_t)(((vbat - 3.20f) / (4.20f - 3.20f)) * 100.0f);
+        s_vbat_filtered = (s_vbat_filtered * 0.85f) + (raw_vbat * 0.15f);
     }
 
-    status->is_charging = (vbat > 4.25f);
-    status->is_critical_low = (vbat <= CRITICAL_BATT_CUTOFF_V && vbat > 2.0f);
+    float vbat = s_vbat_filtered;
+    status->battery_voltage_v = vbat;
+
+    // Check if battery is present: When no battery is plugged into JST, VBAT floats around 0.5V - 1.8V
+    if (vbat < 2.50f) {
+        status->state_of_charge_pct = 0;
+        status->is_charging = false;
+        status->is_critical_low = false;
+        return ESP_OK;
+    }
+
+    // Charging detection (USB charging usually pulls 1S cell to 4.22V+)
+    status->is_charging = (vbat >= 4.22f);
+
+    // Calculate SoC % using 18650 Li-ion piece-wise linear interpolation curve
+    if (vbat >= s_18650_soc_table[0].v) {
+        status->state_of_charge_pct = 100;
+    } else if (vbat <= s_18650_soc_table[SOC_TABLE_SIZE - 1].v) {
+        status->state_of_charge_pct = 0;
+    } else {
+        float pct = 0.0f;
+        for (int i = 0; i < SOC_TABLE_SIZE - 1; i++) {
+            if (vbat <= s_18650_soc_table[i].v && vbat >= s_18650_soc_table[i + 1].v) {
+                float v_high = s_18650_soc_table[i].v;
+                float v_low  = s_18650_soc_table[i + 1].v;
+                float p_high = s_18650_soc_table[i].pct;
+                float p_low  = s_18650_soc_table[i + 1].pct;
+                pct = p_low + ((vbat - v_low) / (v_high - v_low)) * (p_high - p_low);
+                break;
+            }
+        }
+        status->state_of_charge_pct = (uint8_t)(pct + 0.5f);
+    }
+
+    // Critical low check (BMS under-voltage protection alert)
+    status->is_critical_low = (vbat <= CRITICAL_BATT_CUTOFF_V && vbat >= 2.50f);
 
     return ESP_OK;
 }
