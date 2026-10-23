@@ -219,7 +219,9 @@ static void sd_writer_task(void *pvParameters) {
 }
 
 void sd_logger_diag(void) {
-    ESP_LOGI(TAG, "=== SD CARD DIAGNOSTIC ===");
-    esp_err_t err = sd_logger_init();
-    printf("MOUNT_RESULT: %s\n", esp_err_to_name(err));
+    ESP_LOGI(TAG, "=== SD CARD STATUS ===");
+    if (!g_sys_state.sd_mounted) {
+        sd_logger_init();
+    }
+    printf("SD_STATUS: %s\n", g_sys_state.sd_mounted ? "MOUNTED_OK" : "NOT_MOUNTED");
 }
