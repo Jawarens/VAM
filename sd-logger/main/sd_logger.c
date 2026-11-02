@@ -22,11 +22,29 @@ static bool s_is_logging = false;
 static uint32_t s_records_written = 0;
 
 #define QUEUE_CAPACITY          512
-#define CHUNK_BUFFER_SIZE       8192
+#define CHUNK_BUFFER_SIZE       (16 * 1024)
 static char s_chunk_buffer[CHUNK_BUFFER_SIZE];
 static size_t s_chunk_offset = 0;
 
 static void sd_writer_task(void *pvParameters);
+
+esp_err_t sd_logger_unmount(void) {
+    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
+    if (s_log_file) {
+        fclose(s_log_file);
+        s_log_file = NULL;
+    }
+    esp_err_t ret = ESP_OK;
+    if (s_card) {
+        ret = esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, s_card);
+        s_card = NULL;
+    }
+    g_sys_state.sd_mounted = false;
+    // Maintain SD CS HIGH to prevent SPI bus conflict
+    gpio_set_level(PIN_SD_CS, 1);
+    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+    return ret;
+}
 
 esp_err_t sd_logger_init(void) {
     esp_log_level_set("sdmmc_init", ESP_LOG_DEBUG);
@@ -34,6 +52,12 @@ esp_err_t sd_logger_init(void) {
     esp_log_level_set("sdmmc_common", ESP_LOG_DEBUG);
     esp_log_level_set("sdspi_host", ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Initializing SPI MicroSD card on SPI2_HOST...");
+
+    // Cleanly unmount previous session if any to avoid FATFS invalid state
+    if (s_card) {
+        sd_logger_unmount();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 
     // Create the queue and background writer task regardless of initial SD mount status
     if (!s_record_queue) {
@@ -67,7 +91,10 @@ esp_err_t sd_logger_init(void) {
         .allocation_unit_size = 16 * 1024
     };
 
+    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
     esp_err_t ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_card);
+    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "MicroSD card not mounted (%s). Ready to remount on insertion.", esp_err_to_name(ret));
         g_sys_state.sd_mounted = false;
@@ -111,8 +138,10 @@ esp_err_t sd_logger_start_session(void) {
              "/sdcard/logs/LOG_%04d%02d%02d_%02d%02d%02d.csv",
              ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday, ti.tm_hour, ti.tm_min, ti.tm_sec);
 
+    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
     s_log_file = fopen(g_sys_state.current_log_filename, "w");
     if (!s_log_file) {
+        if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
         ESP_LOGE(TAG, "Failed to open new log file: %s", g_sys_state.current_log_filename);
         return ESP_FAIL;
     }
@@ -121,6 +150,7 @@ esp_err_t sd_logger_start_session(void) {
     const char *header = "Timestamp_ISO,Unix_ms,Sample_Idx,INA1_V,INA1_A,INA1_W,INA2_V,INA2_A,INA2_W,DHAB_Low_A,DHAB_High_A,DHAB_A,HO100_A,Total_Current_A,Total_Power_W,Batt_V,Batt_Pct\n";
     fwrite(header, 1, strlen(header), s_log_file);
     fflush(s_log_file);
+    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
 
     s_records_written = 0;
     s_chunk_offset = 0;
@@ -138,6 +168,7 @@ esp_err_t sd_logger_stop_session(void) {
     s_is_logging = false;
     g_sys_state.is_logging = false;
 
+    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
     if (s_log_file && s_chunk_offset > 0) {
         fwrite(s_chunk_buffer, 1, s_chunk_offset, s_log_file);
         s_chunk_offset = 0;
@@ -149,6 +180,7 @@ esp_err_t sd_logger_stop_session(void) {
         fclose(s_log_file);
         s_log_file = NULL;
     }
+    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
 
     ESP_LOGI(TAG, "Multi-channel log finalized. Total records: %lu", (unsigned long)s_records_written);
     return ESP_OK;
@@ -194,7 +226,21 @@ static void sd_writer_task(void *pvParameters) {
 
                 if (len > 0) {
                     if (s_chunk_offset + len >= CHUNK_BUFFER_SIZE) {
-                        fwrite(s_chunk_buffer, 1, s_chunk_offset, s_log_file);
+                        size_t written = 0;
+                        if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
+                        written = fwrite(s_chunk_buffer, 1, s_chunk_offset, s_log_file);
+                        if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+
+                        if (written < s_chunk_offset || ferror(s_log_file)) {
+                            ESP_LOGW(TAG, "SD write hiccup (wrote %u/%u). Attempting clean remount...",
+                                     (unsigned)written, (unsigned)s_chunk_offset);
+                            sd_logger_unmount();
+                            vTaskDelay(pdMS_TO_TICKS(100));
+                            sd_logger_init();
+                            if (g_sys_state.sd_mounted) {
+                                s_log_file = fopen(g_sys_state.current_log_filename, "a");
+                            }
+                        }
                         s_chunk_offset = 0;
                     }
                     memcpy(&s_chunk_buffer[s_chunk_offset], line_buf, len);
@@ -207,13 +253,30 @@ static void sd_writer_task(void *pvParameters) {
 
         if (s_is_logging && s_log_file) {
             TickType_t now = xTaskGetTickCount();
-            if ((now - last_flush_tick) >= pdMS_TO_TICKS(5000)) {
+            if ((now - last_flush_tick) >= pdMS_TO_TICKS(60000)) {
                 if (s_chunk_offset > 0) {
-                    fwrite(s_chunk_buffer, 1, s_chunk_offset, s_log_file);
+                    size_t written = 0;
+                    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
+                    written = fwrite(s_chunk_buffer, 1, s_chunk_offset, s_log_file);
+                    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+
+                    if (written < s_chunk_offset || ferror(s_log_file)) {
+                        ESP_LOGW(TAG, "SD flush write error. Re-mounting SD card cleanly...");
+                        sd_logger_unmount();
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        sd_logger_init();
+                        if (g_sys_state.sd_mounted) {
+                            s_log_file = fopen(g_sys_state.current_log_filename, "a");
+                        }
+                    }
                     s_chunk_offset = 0;
                 }
-                fflush(s_log_file);
-                fsync(fileno(s_log_file));
+                if (s_log_file) {
+                    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
+                    fflush(s_log_file);
+                    fsync(fileno(s_log_file));
+                    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+                }
                 last_flush_tick = now;
             }
         }

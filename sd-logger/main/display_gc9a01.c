@@ -31,6 +31,7 @@ static const char *TAG = "GC9A01";
 #define C_RED           0xF800
 #define C_WHITE         0xFFFF
 #define C_GRAY          0x8410
+#define C_PURPLE        0x915C
 
 static esp_lcd_panel_handle_t s_panel_handle = NULL;
 static uint16_t *s_fb = NULL;
@@ -294,7 +295,6 @@ esp_err_t display_gc9a01_init(void) {
 void display_gc9a01_show_boot_logo(uint32_t duration_ms) {
     if (!s_panel_handle) return;
     ESP_LOGI(TAG, "Displaying Wallhamn Boot Logo for %lu ms...", (unsigned long)duration_ms);
-    // Push the full 240x240 Wallhamn logo from flash
     esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_boot_logo);
     gpio_set_level(PIN_LCD_BL, 1);
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
@@ -305,12 +305,10 @@ void display_gc9a01_set_brightness(uint8_t brightness_pct) {
 }
 
 static void render_screen_overview(const system_state_t *state) {
-    // Large Center Readout: Total System Current with deadband to eliminate flickering
     float disp_curr = state->latest_telemetry.total_system_current_a;
     char curr_str[32];
     uint16_t curr_color;
 
-    // 50mA Deadband around 0: sits cleanly in calm white instead of jumping between green & red
     if (fabsf(disp_curr) <= 0.05f) {
         snprintf(curr_str, sizeof(curr_str), " 0.00 A");
         curr_color = C_WHITE;
@@ -323,21 +321,18 @@ static void render_screen_overview(const system_state_t *state) {
     }
     fb_draw_string_centered(120, 80, curr_str, curr_color, 3);
 
-    // Primary Voltage & Total Power
     char vp_str[48];
     float v_display = (state->latest_telemetry.ina1_bus_voltage_v > 0.5f) ?
                        state->latest_telemetry.ina1_bus_voltage_v : state->latest_telemetry.ina2_bus_voltage_v;
     snprintf(vp_str, sizeof(vp_str), "%.2fV  %.1fW", v_display, state->latest_telemetry.total_power_w);
     fb_draw_string_centered(120, 112, vp_str, C_WHITE, 2);
 
-    // Dual INA Currents line
     char ina_str[48];
     snprintf(ina_str, sizeof(ina_str), "I1:%+.2fA  I2:%+.2fA",
              state->latest_telemetry.ina1_current_a,
              state->latest_telemetry.ina2_current_a);
     fb_draw_string_centered(120, 134, ina_str, C_CYAN, 1);
 
-    // LEM Hall Clamps line (Shows DHAB range indicator L or H)
     char lem_str[48];
     snprintf(lem_str, sizeof(lem_str), "DH-%c:%+.1fA HO:%+.1fA",
              state->latest_telemetry.dhab_in_high_range ? 'H' : 'L',
@@ -345,7 +340,6 @@ static void render_screen_overview(const system_state_t *state) {
              state->latest_telemetry.ho100_current_a);
     fb_draw_string_centered(120, 150, lem_str, C_YELLOW, 1);
 
-    // MicroSD Status
     char sd_str[48];
     if (state->sd_mounted) {
         snprintf(sd_str, sizeof(sd_str), "SD:OK  RECS:%lu", (unsigned long)state->records_written);
@@ -393,13 +387,11 @@ static void render_screen_lem(const system_state_t *state) {
     fb_fill_rect(36, 68, 168, 56, C_CARD_BG);
     fb_draw_string(42, 72, "LEM DHAB S/157 (Dual):", C_YELLOW, 1);
 
-    // Low Range (+/-50A High Sensitivity)
     snprintf(buf, sizeof(buf), "Low (50A):  %+.2fA %s",
              state->latest_telemetry.dhab_ch1_low_a,
              !state->latest_telemetry.dhab_in_high_range ? "[ACT]" : "");
     fb_draw_string(42, 84, buf, !state->latest_telemetry.dhab_in_high_range ? C_GREEN : C_WHITE, 1);
 
-    // High Range (+/-500A High Current)
     snprintf(buf, sizeof(buf), "High(500A): %+.1fA %s",
              state->latest_telemetry.dhab_ch2_high_a,
              state->latest_telemetry.dhab_in_high_range ? "[ACT]" : "");
@@ -418,6 +410,29 @@ static void render_screen_lem(const system_state_t *state) {
     fb_draw_string(42, 156, buf, C_GRAY, 1);
 }
 
+// New Screen 3: Dedicated Wi-Fi Portal Page
+static void render_screen_wifi(const system_state_t *state) {
+    fb_fill_rect(32, 68, 176, 106, C_CARD_BG);
+    fb_draw_rect(32, 68, 176, 106, state->wifi_portal_active ? C_CYAN : C_GRAY);
+
+    fb_draw_string_centered(120, 74, "WIFI LOG PORTAL", C_YELLOW, 1);
+
+    if (state->wifi_portal_active) {
+        fb_draw_string_centered(120, 90, "STATE: ACTIVE [ON]", C_GREEN, 1);
+        fb_draw_string(38, 106, "SSID: ClampMeter-WiFi", C_WHITE, 1);
+        fb_draw_string(38, 120, "URL:  http://192.168.4.1", C_CYAN, 1);
+        fb_draw_string_centered(120, 138, "Phone/PC Download Ready", C_WHITE, 1);
+        fb_draw_string_centered(120, 154, "Click [A2] to Turn OFF", C_ORANGE, 1);
+    } else {
+        fb_draw_string_centered(120, 92, "STATE: DISABLED [OFF]", C_GRAY, 1);
+        fb_draw_string_centered(120, 110, "Click [A2] to Turn ON", C_GREEN, 1);
+        fb_draw_string_centered(120, 126, "Access CSV via Browser", C_CYAN, 1);
+        fb_draw_string_centered(120, 142, "Auto Power Save: Active", C_WHITE, 1);
+        fb_draw_string_centered(120, 156, "Radio is powered down", C_GRAY, 1);
+    }
+}
+
+// Screen 4: System Status
 static void render_screen_system(const system_state_t *state) {
     char buf[48];
 
@@ -455,29 +470,35 @@ void display_gc9a01_update(const system_state_t *state) {
 
     memset(s_fb, 0, LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t));
 
-    uint16_t dial_color = state->is_logging ? C_RED : C_CYAN;
+    uint16_t dial_color = state->is_logging ? C_RED : (state->wifi_portal_active ? C_PURPLE : C_CYAN);
     fb_draw_circle_arc(120, 120, 118, 115, dial_color);
 
     fb_draw_string_centered(120, 18, "VAM LOGGER", C_YELLOW, 2);
 
-    // Battery Bank Indicator (Y = 34): Cleanly placed under title, never overlapping page info!
+    // Battery Bank Indicator (Y = 34)
     float vbat = state->latest_telemetry.battery_v;
     uint8_t pct = state->latest_telemetry.battery_pct;
     if (vbat >= 2.50f) {
-        int bx = 76, by = 33;
+        int bx = state->is_charging ? 64 : 76;
+        int by = 33;
         fb_draw_rect(bx, by, 20, 10, C_WHITE);
         fb_fill_rect(bx + 20, by + 2, 2, 6, C_WHITE); // Positive nub
 
         int fill_w = (pct * 16) / 100;
         if (fill_w > 16) fill_w = 16;
-        uint16_t fill_color = (pct > 50) ? C_GREEN : ((pct >= 20) ? C_YELLOW : C_RED);
+        uint16_t fill_color = state->is_charging ? C_CYAN : ((pct > 50) ? C_GREEN : ((pct >= 20) ? C_YELLOW : C_RED));
         if (fill_w > 0) {
             fb_fill_rect(bx + 2, by + 2, fill_w, 6, fill_color);
         }
 
-        char batt_str[32];
-        snprintf(batt_str, sizeof(batt_str), "%.2fV %u%%", vbat, pct);
-        fb_draw_string(bx + 28, by + 1, batt_str, C_WHITE, 1);
+        char batt_str[36];
+        if (state->is_charging) {
+            snprintf(batt_str, sizeof(batt_str), "%.2fV %u%% CHG", vbat, pct);
+            fb_draw_string(bx + 26, by + 1, batt_str, C_CYAN, 1);
+        } else {
+            snprintf(batt_str, sizeof(batt_str), "%.2fV %u%%", vbat, pct);
+            fb_draw_string(bx + 28, by + 1, batt_str, C_WHITE, 1);
+        }
     } else {
         fb_draw_string_centered(120, 34, "[USB POWER]", C_CYAN, 1);
     }
@@ -486,6 +507,9 @@ void display_gc9a01_update(const system_state_t *state) {
     if (state->is_logging) {
         fb_fill_rect(65, 48, 110, 16, C_RED);
         fb_draw_string_centered(120, 52, state->is_zeroed ? "REC [TARE]" : "RECORDING", C_WHITE, 1);
+    } else if (state->wifi_portal_active) {
+        fb_fill_rect(60, 48, 120, 16, C_PURPLE);
+        fb_draw_string_centered(120, 52, "WIFI ACTIVE", C_WHITE, 1);
     } else {
         fb_fill_rect(70, 48, 100, 16, C_CARD_BG);
         fb_draw_string_centered(120, 52, state->is_zeroed ? "STANDBY [TARE]" : "STANDBY", state->is_zeroed ? C_CYAN : C_GREEN, 1);
@@ -499,6 +523,9 @@ void display_gc9a01_update(const system_state_t *state) {
             render_screen_lem(state);
             break;
         case 3:
+            render_screen_wifi(state);
+            break;
+        case 4:
             render_screen_system(state);
             break;
         case 0:
@@ -515,14 +542,27 @@ void display_gc9a01_update(const system_state_t *state) {
     }
 
     char nav_str[48];
-    snprintf(nav_str, sizeof(nav_str), "< P%u/3 > [Hold A1:Zero]", state->ui_screen);
+    snprintf(nav_str, sizeof(nav_str), "< P%u/4 > [Hold A1:Zero]", state->ui_screen);
     fb_draw_string_centered(120, 186, nav_str, C_GRAY, 1);
 
-    if (state->is_logging) {
+    if (state->ui_screen == 3) {
+        if (state->wifi_portal_active) {
+            fb_draw_string_centered(120, 204, "[A2] TURN WIFI OFF", C_ORANGE, 1);
+        } else {
+            fb_draw_string_centered(120, 204, "[A2] TURN WIFI ON", C_GREEN, 1);
+        }
+    } else if (state->is_logging) {
         fb_draw_string_centered(120, 204, "[A2] STOP LOG", C_RED, 1);
     } else {
         fb_draw_string_centered(120, 204, "[A2] START LOG", C_GREEN, 1);
     }
 
-    esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_fb);
+    if (g_spi_bus_mutex) {
+        if (xSemaphoreTake(g_spi_bus_mutex, pdMS_TO_TICKS(150)) == pdTRUE) {
+            esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_fb);
+            xSemaphoreGive(g_spi_bus_mutex);
+        }
+    } else {
+        esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_fb);
+    }
 }

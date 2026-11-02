@@ -4,6 +4,11 @@ CONFIG_IDF_TARGET="esp32s3"
 # Flash settings: 8MB Flash
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
+# Custom Partition Table for 8MB Flash (3MB App Partition)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
 # NO PSRAM on this board
 # CONFIG_ESP32S3_SPIRAM_SUPPORT is not set
 

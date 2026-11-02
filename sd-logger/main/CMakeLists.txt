@@ -5,5 +5,7 @@ idf_component_register(SRCS "main.c"
                             "sd_logger.c"
                             "display_gc9a01.c"
                             "power_mgr.c"
+                            "wifi_portal.c"
+                            "status_led.c"
                        INCLUDE_DIRS "."
-                       REQUIRES driver esp_timer esp_adc fatfs esp_pm sdmmc esp_driver_i2c esp_driver_gpio esp_driver_spi esp_driver_ledc esp_lcd)
+                       REQUIRES driver esp_timer esp_adc fatfs esp_pm sdmmc esp_driver_i2c esp_driver_gpio esp_driver_spi esp_driver_ledc esp_lcd esp_driver_usb_serial_jtag esp_wifi esp_http_server nvs_flash esp_netif esp_event led_strip)

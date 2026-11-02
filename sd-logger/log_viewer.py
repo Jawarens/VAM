@@ -12,6 +12,8 @@ import os
 import sys
 import argparse
 import datetime
+import io
+import re
 import pandas as pd
 import numpy as np
 
@@ -83,7 +85,17 @@ def load_log_file(filepath):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File not found: {filepath}")
 
-    df = pd.read_csv(filepath)
+    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    # Repair rows where a newline was dropped between timestamps (e.g. from UART buffer overrun)
+    fixed_content = re.sub(r'([^\r\n])(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', r'\1\n\2', content)
+
+    try:
+        df = pd.read_csv(io.StringIO(fixed_content), on_bad_lines="skip")
+    except TypeError:
+        df = pd.read_csv(io.StringIO(fixed_content), error_bad_lines=False, warn_bad_lines=False)
+
     df.columns = [c.strip() for c in df.columns]
 
     # Convert timestamp
@@ -737,12 +749,13 @@ if __name__ == "__main__":
                 target_file = max(files, key=os.path.getmtime)
 
     if target_file and os.path.exists(target_file):
-        df = load_log_file(target_file)
         if args.html:
+            df = load_log_file(target_file)
             out = export_html_report(df, target_file)
             print(f"Report ready: {out}")
             sys.exit(0)
         elif args.excel:
+            df = load_log_file(target_file)
             out = export_excel_report(df, target_file)
             print(f"Excel ready: {out}")
             sys.exit(0)

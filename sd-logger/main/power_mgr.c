@@ -4,6 +4,7 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_pm.h"
 #include "esp_log.h"
+#include "driver/usb_serial_jtag.h"
 #include <math.h>
 
 static const char *TAG = "POWER_MGR";
@@ -82,18 +83,19 @@ esp_err_t power_mgr_read_battery(battery_status_t *status) {
                 status->state_of_charge_pct = 0;
             }
 
+            bool usb_plugged = usb_serial_jtag_is_connected();
             if (max17048_read_reg16(MAX17048_REG_CRATE, &raw_crate) == ESP_OK) {
                 int16_t crate = (int16_t)raw_crate;
-                status->is_charging = (crate > 5); // Positive charge rate
+                status->is_charging = usb_plugged || (crate > 1);
             } else {
-                status->is_charging = (vcell >= 4.22f);
+                status->is_charging = usb_plugged || (vcell >= 4.20f);
             }
 
             // If cell voltage is under 2.50V, no battery is connected to JST
             if (vcell < 2.50f) {
                 status->battery_voltage_v = 0.0f;
                 status->state_of_charge_pct = 0;
-                status->is_charging = false;
+                status->is_charging = usb_plugged;
                 status->is_critical_low = false;
             } else {
                 status->is_critical_low = (vcell <= CRITICAL_BATT_CUTOFF_V);
@@ -105,7 +107,7 @@ esp_err_t power_mgr_read_battery(battery_status_t *status) {
     // Fallback if fuel gauge read fails
     status->battery_voltage_v = 0.0f;
     status->state_of_charge_pct = 0;
-    status->is_charging = false;
+    status->is_charging = usb_serial_jtag_is_connected();
     status->is_critical_low = false;
     return ESP_OK;
 }
