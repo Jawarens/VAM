@@ -21,8 +21,8 @@ static FILE *s_log_file = NULL;
 static bool s_is_logging = false;
 static uint32_t s_records_written = 0;
 
-#define QUEUE_CAPACITY          512
-#define CHUNK_BUFFER_SIZE       (16 * 1024)
+#define QUEUE_CAPACITY          64
+#define CHUNK_BUFFER_SIZE       (4 * 1024)
 static char s_chunk_buffer[CHUNK_BUFFER_SIZE];
 static size_t s_chunk_offset = 0;
 
@@ -62,7 +62,11 @@ esp_err_t sd_logger_init(void) {
     // Create the queue and background writer task regardless of initial SD mount status
     if (!s_record_queue) {
         s_record_queue = xQueueCreate(QUEUE_CAPACITY, sizeof(telemetry_record_t));
-        xTaskCreatePinnedToCore(sd_writer_task, "sd_writer", 6144, NULL, 4, NULL, 1);
+        if (s_record_queue) {
+            xTaskCreatePinnedToCore(sd_writer_task, "sd_writer", 4096, NULL, 4, NULL, 1);
+        } else {
+            ESP_LOGE(TAG, "Failed to create SD telemetry record queue (out of memory)");
+        }
     }
 
     // Ensure MISO, MOSI and CS have internal pull-ups enabled for SPI SD integrity
@@ -197,6 +201,10 @@ esp_err_t sd_logger_push_record(const telemetry_record_t *record) {
 }
 
 static void sd_writer_task(void *pvParameters) {
+    if (!s_record_queue) {
+        vTaskDelete(NULL);
+        return;
+    }
     telemetry_record_t rec;
     char line_buf[256];
     TickType_t last_flush_tick = xTaskGetTickCount();
