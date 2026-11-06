@@ -506,7 +506,7 @@ static void usb_cli_task(void *pvParameters) {
                     printf("<FILE_DATA_END:%s>\n", fname);
                 }
             } else if (strcmp(line, "STATUS") == 0) {
-                printf("STATUS: Total_I=%.2fA, INA1=(%.2fV, %.3fA), INA2=(%.2fV, %.3fA), DHAB_L=%.2fA, DHAB_H=%.2fA, HO100=%.2fA, P=%.1fW, Batt=%.2fV(%u%%), Recs=%lu, Zeroed=%d, SD=%s, WiFi=%s\n",
+                printf("STATUS: Total_I=%.2fA, INA1=(%.2fV, %.3fA), INA2=(%.2fV, %.3fA), DHAB_L=%.2fA, DHAB_H=%.2fA, HO100=%.2fA, RawV=[D1=%.3fV, D2=%.3fV, HO=%.3fV], Batt=%.2fV(%u%%), Recs=%lu, Zeroed=%d, SD=%s, WiFi=%s\n",
                        g_sys_state.latest_telemetry.total_system_current_a,
                        g_sys_state.latest_telemetry.ina1_bus_voltage_v,
                        g_sys_state.latest_telemetry.ina1_current_a,
@@ -515,7 +515,9 @@ static void usb_cli_task(void *pvParameters) {
                        g_sys_state.latest_telemetry.dhab_ch1_low_a,
                        g_sys_state.latest_telemetry.dhab_ch2_high_a,
                        g_sys_state.latest_telemetry.ho100_current_a,
-                       g_sys_state.latest_telemetry.total_power_w,
+                       g_sys_state.latest_telemetry.dhab_ch1_50a_raw_v,
+                       g_sys_state.latest_telemetry.dhab_ch2_500a_raw_v,
+                       g_sys_state.latest_telemetry.ho100_raw_v,
                        g_sys_state.latest_telemetry.battery_v,
                        g_sys_state.latest_telemetry.battery_pct,
                        (unsigned long)g_sys_state.records_written,

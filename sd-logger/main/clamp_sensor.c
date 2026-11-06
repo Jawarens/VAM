@@ -37,21 +37,21 @@ static void sort_int(int arr[], int n) {
 }
 
 // Sample a channel with burst oversampling & trimmed-mean to reject power rail & ADC noise spikes
-#define SAMPLES_PER_BURST 32
+#define SAMPLES_PER_BURST 64
 static int read_channel_filtered_mv(adc_channel_t ch, adc_cali_handle_t cali) {
     int raw_buf[SAMPLES_PER_BURST];
 
     for (int i = 0; i < SAMPLES_PER_BURST; i++) {
         adc_oneshot_read(g_adc1_handle, ch, &raw_buf[i]);
-        esp_rom_delay_us(10); // S/H settling time between conversions
+        esp_rom_delay_us(250); // Spaced across 16ms to reject 50Hz/60Hz AC hum and switching ripple
     }
 
     sort_int(raw_buf, SAMPLES_PER_BURST);
 
-    // Trim top 25% and bottom 25% (rejects transient spikes completely)
+    // Trim top 25% and bottom 25% (rejects transient spikes completely, averages middle 32 samples)
     int32_t accum_raw = 0;
     int trimmed_count = 0;
-    for (int i = 8; i < 24; i++) {
+    for (int i = 16; i < 48; i++) {
         accum_raw += raw_buf[i];
         trimmed_count++;
     }
@@ -156,16 +156,28 @@ esp_err_t lem_sensors_read_all(lem_sensors_data_t *data) {
     float sens_ho100 = (8.0f / VOLTAGE_DIVIDER_RATIO);
     float raw_ho100_curr = ((float)v3 - s_zero_ho100_mv) / sens_ho100;
 
-    // Exponential Moving Average filter (70% prior + 30% new) to eliminate high frequency residue
+    // Multi-stage IIR filter (88% prior + 12% new) to eliminate high frequency residue on 100A sensor
     static float s_filtered_ho100 = 0.0f;
     static bool s_ho100_first_run = true;
     if (s_ho100_first_run) {
         s_filtered_ho100 = raw_ho100_curr;
         s_ho100_first_run = false;
     } else {
-        s_filtered_ho100 = (s_filtered_ho100 * 0.70f) + (raw_ho100_curr * 0.30f);
+        s_filtered_ho100 = (s_filtered_ho100 * 0.88f) + (raw_ho100_curr * 0.12f);
     }
-    data->ho100_current_a = s_filtered_ho100;
+
+    // Deadband noise floor suppression:
+    // If measured current is within +/- 0.15A of zero, hold at exactly 0.00A
+    if (fabsf(s_filtered_ho100) < 0.15f) {
+        data->ho100_current_a = 0.0f;
+    } else {
+        data->ho100_current_a = s_filtered_ho100;
+    }
+
+    // Deadband for DHAB channels
+    if (fabsf(data->dhab_ch1_low_a) < 0.05f) data->dhab_ch1_low_a = 0.0f;
+    if (fabsf(data->dhab_ch2_high_a) < 0.25f) data->dhab_ch2_high_a = 0.0f;
+    if (fabsf(data->dhab_current_a) < 0.05f) data->dhab_current_a = 0.0f;
 
     return ESP_OK;
 }

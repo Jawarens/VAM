@@ -239,7 +239,8 @@ esp_err_t display_gc9a01_init(void) {
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
     };
     gpio_config(&bk_cfg);
-    gpio_set_level(PIN_LCD_BL, 1);
+    // Keep backlight completely OFF during SPI setup and display initialization
+    gpio_set_level(PIN_LCD_BL, 0);
 
     spi_bus_config_t buscfg = {
         .sclk_io_num = PIN_LCD_SCLK,
@@ -259,7 +260,7 @@ esp_err_t display_gc9a01_init(void) {
     esp_lcd_panel_io_spi_config_t io_config = {
         .dc_gpio_num = PIN_LCD_DC,
         .cs_gpio_num = PIN_LCD_CS,
-        .pclk_hz = 10 * 1000 * 1000,
+        .pclk_hz = 40 * 1000 * 1000, // 40 MHz SPI PCLK for rock-solid flicker-free rendering
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
@@ -288,14 +289,18 @@ esp_err_t display_gc9a01_init(void) {
     esp_lcd_panel_mirror(s_panel_handle, true, false);
     esp_lcd_panel_disp_on_off(s_panel_handle, true);
 
-    ESP_LOGI(TAG, "GC9A01 LCD initialized successfully via esp_lcd");
+    ESP_LOGI(TAG, "GC9A01 LCD initialized successfully via esp_lcd (40 MHz SPI)");
     return ESP_OK;
 }
 
 void display_gc9a01_show_boot_logo(uint32_t duration_ms) {
-    if (!s_panel_handle) return;
+    if (!s_panel_handle || !s_fb) return;
     ESP_LOGI(TAG, "Displaying Wallhamn Boot Logo for %lu ms...", (unsigned long)duration_ms);
-    esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_boot_logo);
+    // Copy into DMA-capable internal RAM buffer first to eliminate flash cache DMA stalls
+    memcpy(s_fb, s_boot_logo, LCD_WIDTH * LCD_HEIGHT * sizeof(uint16_t));
+    esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_WIDTH, LCD_HEIGHT, s_fb);
+    // Wait for frame transfer to complete into GRAM before enabling backlight
+    vTaskDelay(pdMS_TO_TICKS(50));
     gpio_set_level(PIN_LCD_BL, 1);
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
 }
