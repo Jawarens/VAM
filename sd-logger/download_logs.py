@@ -61,7 +61,7 @@ def download_file(ser, filename, dest_dir="logs"):
             start = time.time()
             
     if lines:
-        with open(dest_path, "w", encoding="utf-8") as f:
+        with open(dest_path, "w", encoding="utf-8", newline="") as f:
             f.writelines(lines)
         print(f"  [OK] Downloaded {filename} -> {dest_path} ({len(lines)} lines)")
         return dest_path

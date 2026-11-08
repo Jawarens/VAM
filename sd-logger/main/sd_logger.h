@@ -11,6 +11,7 @@ extern "C" {
 #define SD_MOUNT_POINT "/sdcard"
 
 esp_err_t sd_logger_init(void);
+esp_err_t sd_logger_unmount(void);
 esp_err_t sd_logger_start_session(void);
 esp_err_t sd_logger_stop_session(void);
 void sd_logger_diag(void);

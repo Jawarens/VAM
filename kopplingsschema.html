@@ -1,0 +1,1204 @@
+<!DOCTYPE html>
+<html lang="sv" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kopplingsschema - VAM Feather Logger (Fysiska Pinnar som på Kortet)</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    :root {
+      --bg: #070a12;
+      --card-bg: #0f172a;
+      --border-color: #1e293b;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 16px;
+      overflow-x: hidden;
+    }
+    .wire-path {
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      transition: stroke-width 0.2s, stroke-opacity 0.2s, filter 0.2s;
+    }
+    .wire-dimmed {
+      stroke-opacity: 0.08 !important;
+    }
+    .wire-highlighted {
+      stroke-width: 5.5px !important;
+      stroke-opacity: 1 !important;
+      filter: drop-shadow(0 0 8px currentColor);
+    }
+    .wire-pulse {
+      stroke-dasharray: 8, 6;
+      animation: dashMove 1.2s linear infinite;
+    }
+    @keyframes dashMove {
+      from { stroke-dashoffset: 28; }
+      to { stroke-dashoffset: 0; }
+    }
+    .pin-hover {
+      cursor: pointer;
+      transition: transform 0.15s, filter 0.15s;
+    }
+    .pin-hover:hover {
+      transform: scale(1.4);
+      filter: drop-shadow(0 0 7px #38bdf8);
+    }
+    .isolation-barrier {
+      stroke: #f59e0b;
+      stroke-width: 2.5;
+      stroke-dasharray: 8, 5;
+      animation: barrierPulse 2s ease-in-out infinite alternate;
+    }
+    @keyframes barrierPulse {
+      from { stroke-opacity: 0.45; filter: drop-shadow(0 0 2px #f59e0b); }
+      to { stroke-opacity: 1.0; filter: drop-shadow(0 0 8px #f59e0b); }
+    }
+    .grab-cursor {
+      cursor: grab;
+    }
+    .grabbing-cursor {
+      cursor: grabbing !important;
+    }
+    ::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased">
+
+  <!-- Header -->
+  <header class="flex flex-wrap items-center justify-between gap-4 mb-4 pb-3 border-b border-slate-800">
+    <div>
+      <div class="flex items-center gap-3">
+        <div class="w-3.5 h-3.5 rounded-full bg-emerald-500 animate-pulse"></div>
+        <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white">VAM Logger Kopplingsschema (Fysiska Pinnar)</h1>
+        <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Fysisk Silkscreen-Layout</span>
+        <span class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">🔍 Zooma & Panorera</span>
+      </div>
+      <p class="text-xs md:text-sm text-slate-400 mt-1">
+        Feather ESP32-S3 visar nu exakt de namn som står tryckta på kortet (A1–A5, SCK, MO, MI, 5, 6, 9, 10, 12, SCL, SDA) samt GPIO-nummer.
+      </p>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="flex items-center gap-2 flex-wrap">
+      <button onclick="toggleFullScreen()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1.5 shadow">
+        <span>⛶</span> Fullskärm
+      </button>
+      <button onclick="window.print()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1.5 shadow">
+        <span>🖨️</span> Skriv ut / Spara PDF
+      </button>
+    </div>
+  </header>
+
+  <!-- Filter Controls Toolbar -->
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-4 p-3 bg-slate-900 rounded-xl border border-slate-800 shadow-sm">
+    <div class="flex flex-wrap items-center gap-1.5" id="busFilterGroup">
+      <span class="text-xs font-semibold text-slate-400 mr-1">Filtrera krets:</span>
+      <button onclick="setBusFilter('all')" data-bus="all" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-blue-600 text-white shadow-sm transition">Alla Kablar</button>
+      <button onclick="setBusFilter('stepup')" data-bus="stepup" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">⚡ 3.3V→5V Step-Up (22µF/100µF)</button>
+      <button onclick="setBusFilter('isolation1')" data-bus="isolation1" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">🛡️ Isolator #1 (0x40 Shunt 1)</button>
+      <button onclick="setBusFilter('isolation2')" data-bus="isolation2" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">🛡️ Isolator #2 (0x41 Shunt 2)</button>
+      <button onclick="setBusFilter('i2c')" data-bus="i2c" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">🟡 MCU I2C (SCL / SDA)</button>
+      <button onclick="setBusFilter('spi')" data-bus="spi" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">🟣 SPI (SCK / MO / MI / 10 / 12 / 9)</button>
+      <button onclick="setBusFilter('analog')" data-bus="analog" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">🔵 LEM Ström (5, 6, A5)</button>
+      <button onclick="setBusFilter('buttons')" data-bus="buttons" class="filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700">⚪ Knappar (A1, A2, A3)</button>
+    </div>
+
+    <!-- Active Filter Indicator -->
+    <div id="activeWireBadge" class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-mono hidden">
+      Markerad: <span id="activeWireText" class="font-bold text-white"></span>
+    </div>
+  </div>
+
+  <!-- Main Canvas & Inspector Layout -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
+
+    <!-- Interactive SVG Schematic Visualizer (8.5 Cols) -->
+    <div class="lg:col-span-8 bg-slate-900 rounded-xl border border-slate-800 p-3 shadow-sm flex flex-col relative overflow-hidden">
+      
+      <!-- Toolbar & Zoom Readout -->
+      <div class="flex items-center justify-between mb-2 px-1">
+        <span class="text-xs font-bold text-slate-400 tracking-wider uppercase">
+          Kretspanel (Rulla mushjul för att zooma, håll vänsterklick och dra)
+        </span>
+        
+        <!-- On-Screen Zoom Controls -->
+        <div class="flex items-center gap-1.5 bg-slate-950/80 backdrop-blur px-2 py-1 rounded-lg border border-slate-800 shadow">
+          <button onclick="zoomOut()" title="Zooma ut" class="w-7 h-7 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm flex items-center justify-center transition">−</button>
+          <span id="zoomLevelDisplay" class="text-xs font-mono px-2 text-cyan-400 font-bold min-w-[50px] text-center">100%</span>
+          <button onclick="zoomIn()" title="Zooma in" class="w-7 h-7 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-sm flex items-center justify-center transition">+</button>
+          <div class="w-[1px] h-4 bg-slate-700 mx-1"></div>
+          <button onclick="resetZoomPan()" title="Återställ vy" class="px-2 h-7 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 transition flex items-center gap-1">↺ Återställ</button>
+        </div>
+      </div>
+
+      <!-- SVG Viewport Container (Spacious 1680 x 1150 coordinate space) -->
+      <div class="w-full flex-1 min-h-[680px] lg:min-h-[750px] rounded-lg border border-slate-800 bg-[#060810] relative overflow-hidden flex items-center justify-center grab-cursor" id="svgContainer">
+        
+        <svg id="schematicSvg" viewBox="0 0 1680 1150" class="w-full h-full select-none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse">
+              <path d="M 25 0 L 0 0 0 25" fill="none" stroke="#111827" stroke-width="0.5" />
+            </pattern>
+            <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+              <feDropShadow dx="2" dy="3" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.75"/>
+            </filter>
+            <!-- Pattern for Zone 1 -->
+            <pattern id="isoHatch1" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+              <line x1="0" y1="0" x2="0" y2="12" stroke="#3b82f6" stroke-width="1.2" stroke-opacity="0.18" />
+            </pattern>
+            <!-- Pattern for Zone 2 -->
+            <pattern id="isoHatch2" width="12" height="12" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+              <line x1="0" y1="0" x2="0" y2="12" stroke="#a855f7" stroke-width="1.2" stroke-opacity="0.18" />
+            </pattern>
+          </defs>
+
+          <!-- Background Grid -->
+          <rect width="1680" height="1150" fill="url(#grid)" />
+
+          <!-- ============================================================ -->
+          <!-- ZOOM & PAN ROOT GROUP                                        -->
+          <!-- ============================================================ -->
+          <g id="zoomGroup" transform="translate(0, 0) scale(1)">
+
+            <!-- ISOLATION BARRIER REGIONS (ZONES) -->
+            <!-- Zone 1: INA228 #1 (0x40) Galvanically Isolated Domain -->
+            <rect x="360" y="870" width="340" height="220" rx="14" fill="url(#isoHatch1)" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="6,4" stroke-opacity="0.75" />
+            <text x="530" y="1065" font-size="11" font-weight="bold" fill="#60a5fa" text-anchor="middle" letter-spacing="1">ISOLERAD MÄTZON 1 (0x40)</text>
+            <text x="530" y="1080" font-size="9" fill="#93c5fd" text-anchor="middle">Egen isolerad jord GND_ISO1</text>
+
+            <!-- Zone 2: INA228 #2 (0x41) Galvanically Isolated Domain -->
+            <rect x="960" y="870" width="340" height="220" rx="14" fill="url(#isoHatch2)" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="6,4" stroke-opacity="0.75" />
+            <text x="1130" y="1065" font-size="11" font-weight="bold" fill="#c084fc" text-anchor="middle" letter-spacing="1">ISOLERAD MÄTZON 2 (0x41)</text>
+            <text x="1130" y="1080" font-size="9" fill="#d8b4fe" text-anchor="middle">Egen isolerad jord GND_ISO2</text>
+
+            <!-- Galvanic Barrier Line across bottom -->
+            <line x1="300" y1="730" x2="1360" y2="730" class="isolation-barrier" />
+
+            <!-- ========================================== -->
+            <!-- WIRE PATHS LAYER (PHYSICAL ROUTING)        -->
+            <!-- ========================================== -->
+            <g id="wiresGroup">
+              <!-- 3.3V Logic from Feather 3V pin (660, 360) to Step-Up, LCD, Adalogger, Isolators -->
+              <path id="wire_3v3_stepup" class="wire-path bus-stepup" d="M 660,360 H 540 V 115 H 580" stroke="#f97316" stroke-width="3" />
+              <path id="wire_3v3_lcd" class="wire-path bus-power" d="M 660,360 H 520 V 558 H 270" stroke="#f97316" stroke-width="3" />
+              <path id="wire_3v3_ada" class="wire-path bus-power" d="M 660,360 H 640 V 270 H 1080 V 370 H 1100" stroke="#f97316" stroke-width="3" />
+              <path id="wire_3v3_iso1" class="wire-path bus-isolation1" d="M 660,360 H 530 V 810 H 420" stroke="#f97316" stroke-width="2.5" />
+              <path id="wire_3v3_iso2" class="wire-path bus-isolation2" d="M 530,710 H 960 V 810 H 980" stroke="#f97316" stroke-width="2.5" />
+
+              <!-- Boosted 5.0V Rail from Step-Up (Red) with Bulk Capacitors -->
+              <path id="wire_5v_cap_bank" class="wire-path bus-stepup" d="M 760,115 H 810" stroke="#ef4444" stroke-width="4" />
+              <path id="wire_5v_dhab" class="wire-path bus-stepup" d="M 580,115 H 560 V 50 H 100 V 70" stroke="#ef4444" stroke-width="3" />
+              <path id="wire_5v_ho" class="wire-path bus-stepup" d="M 990,115 H 1360 V 70" stroke="#ef4444" stroke-width="3" />
+
+              <!-- Non-Isolated MCU Ground from Feather GND pin (660, 410) -->
+              <path id="wire_gnd_stepup" class="wire-path bus-stepup" d="M 660,410 H 555 V 155 H 580" stroke="#64748b" stroke-width="3" stroke-dasharray="4,2" />
+              <path id="wire_gnd_cap_bank" class="wire-path bus-stepup" d="M 760,155 H 810" stroke="#64748b" stroke-width="3" stroke-dasharray="4,2" />
+              <path id="wire_gnd_dhab" class="wire-path bus-stepup" d="M 555,155 V 35 H 160 V 70" stroke="#64748b" stroke-width="3" stroke-dasharray="4,2" />
+              <path id="wire_gnd_ho" class="wire-path bus-stepup" d="M 990,155 H 1400 V 70" stroke="#64748b" stroke-width="3" stroke-dasharray="4,2" />
+              <path id="wire_gnd_lcd" class="wire-path bus-power" d="M 660,410 H 510 V 558 H 300" stroke="#64748b" stroke-width="3" stroke-dasharray="4,2" />
+              <path id="wire_gnd_ada" class="wire-path bus-power" d="M 660,410 H 630 V 280 H 1090 V 400 H 1100" stroke="#64748b" stroke-width="3" stroke-dasharray="4,2" />
+              <path id="wire_gnd_iso1" class="wire-path bus-isolation1" d="M 660,410 H 520 V 830 H 420" stroke="#64748b" stroke-width="2.5" stroke-dasharray="4,2" />
+              <path id="wire_gnd_iso2" class="wire-path bus-isolation2" d="M 520,720 H 950 V 830 H 980" stroke="#64748b" stroke-width="2.5" stroke-dasharray="4,2" />
+              <path id="wire_gnd_buttons" class="wire-path bus-buttons" d="M 510,410 H 200 V 590 H 130" stroke="#64748b" stroke-width="2.5" stroke-dasharray="4,2" />
+
+              <!-- Buttons A1, A2, A3 (Physical left header: 660, 460 / 485 / 510) -->
+              <path id="wire_btn_left" class="wire-path bus-buttons" d="M 660,460 H 200" stroke="#cbd5e1" stroke-width="2.5" />
+              <path id="wire_btn_menu" class="wire-path bus-buttons" d="M 660,485 H 200" stroke="#cbd5e1" stroke-width="2.5" />
+              <path id="wire_btn_right" class="wire-path bus-buttons" d="M 660,510 H 200" stroke="#cbd5e1" stroke-width="2.5" />
+
+              <!-- LCD Backlight (Physical A4: 660, 535) -> LCD BLK (450, 558) -->
+              <path id="wire_lcd_bl" class="wire-path bus-spi" d="M 660,535 H 480 V 558 H 450" stroke="#f59e0b" stroke-width="2.5" />
+
+              <!-- LEM HO-100 Analog ADC (Physical A5: 660, 560) <- RC Filter HO (1060, 140) -->
+              <path id="wire_lem_ho_raw" class="wire-path bus-analog" d="M 1440,210 V 230 H 1260 V 140" stroke="#14b8a6" stroke-width="2.5" />
+              <path id="wire_lem_ho_filt" class="wire-path bus-analog" d="M 1060,140 H 1020 V 260 H 630 V 560 H 660" stroke="#14b8a6" stroke-width="3" />
+
+              <!-- SPI SCK (Physical SCK: 660, 585) -> LCD SCL (330) & Adalogger SCK (1100, 520) -->
+              <path id="wire_spi_sck_lcd" class="wire-path bus-spi" d="M 660,585 H 490 V 620 H 330 V 558" stroke="#a855f7" stroke-width="3" />
+              <path id="wire_spi_sck_ada" class="wire-path bus-spi" d="M 490,620 H 1070 V 520 H 1100" stroke="#a855f7" stroke-width="3" />
+
+              <!-- SPI MOSI (Physical MO: 660, 610) -> LCD SDA (360) & Adalogger MOSI (1100, 550) -->
+              <path id="wire_spi_mosi_lcd" class="wire-path bus-spi" d="M 660,610 H 500 V 635 H 360 V 558" stroke="#10b981" stroke-width="3" />
+              <path id="wire_spi_mosi_ada" class="wire-path bus-spi" d="M 500,635 H 1080 V 550 H 1100" stroke="#10b981" stroke-width="3" />
+
+              <!-- SPI MISO (Physical MI: 660, 635) <- Adalogger MISO (1100, 580) -->
+              <path id="wire_spi_miso_ada" class="wire-path bus-spi" d="M 1100,580 H 1090 V 650 H 640 V 635 H 660" stroke="#06b6d4" stroke-width="3" />
+
+              <!-- RIGHT HEADER WIRES -->
+              <!-- LCD CS (Physical Pin 12: 950, 435) -> LCD CS (390, 558) -->
+              <path id="wire_lcd_cs" class="wire-path bus-spi" d="M 950,435 H 970 V 665 H 390 V 558" stroke="#6366f1" stroke-width="3" />
+
+              <!-- Adalogger MicroSD CS (Physical Pin 10: 950, 485) -> Adalogger CS (1100, 490) -->
+              <path id="wire_sd_cs" class="wire-path bus-spi" d="M 950,485 H 1100" stroke="#84cc16" stroke-width="3.5" />
+
+              <!-- LCD DC (Physical Pin 9: 950, 510) -> LCD DC (420, 558) -->
+              <path id="wire_lcd_dc" class="wire-path bus-spi" d="M 950,510 H 980 V 680 H 420 V 558" stroke="#ec4899" stroke-width="2.5" />
+
+              <!-- LEM DHAB CH2 High (Physical Pin 6: 950, 535) <- RC Filter CH2 (510, 160) -->
+              <path id="wire_lem_ch2_raw" class="wire-path bus-analog" d="M 190,210 V 240 H 300 V 160" stroke="#3b82f6" stroke-width="2.5" />
+              <path id="wire_lem_ch2_filt" class="wire-path bus-analog" d="M 510,160 H 540 V 250 H 970 V 535 H 950" stroke="#3b82f6" stroke-width="3" />
+
+              <!-- LEM DHAB CH1 Low (Physical Pin 5: 950, 560) <- RC Filter CH1 (510, 120) -->
+              <path id="wire_lem_ch1_raw" class="wire-path bus-analog" d="M 130,210 V 230 H 300 V 120" stroke="#38bdf8" stroke-width="2.5" />
+              <path id="wire_lem_ch1_filt" class="wire-path bus-analog" d="M 510,120 H 530 V 240 H 960 V 560 H 950" stroke="#38bdf8" stroke-width="3" />
+
+              <!-- I2C SCL (Physical Pin SCL: 950, 585) -> Adalogger SCL & Isolators -->
+              <path id="wire_i2c_scl_ada" class="wire-path bus-i2c" d="M 950,585 H 1050 V 430 H 1100" stroke="#eab308" stroke-width="3" />
+              <path id="wire_i2c_scl_iso1" class="wire-path bus-i2c bus-isolation1" d="M 950,585 H 1010 V 700 H 400 V 790 H 420" stroke="#eab308" stroke-width="3" />
+              <path id="wire_i2c_scl_iso2" class="wire-path bus-i2c bus-isolation2" d="M 1010,700 V 790 H 980" stroke="#eab308" stroke-width="3" />
+
+              <!-- I2C SDA (Physical Pin SDA: 950, 610) -> Adalogger SDA & Isolators -->
+              <path id="wire_i2c_sda_ada" class="wire-path bus-i2c" d="M 950,610 H 1060 V 460 H 1100" stroke="#2563eb" stroke-width="3" />
+              <path id="wire_i2c_sda_iso1" class="wire-path bus-i2c bus-isolation1" d="M 950,610 H 1020 V 690 H 390 V 770 H 420" stroke="#2563eb" stroke-width="3" />
+              <path id="wire_i2c_sda_iso2" class="wire-path bus-i2c bus-isolation2" d="M 1020,690 V 770 H 980" stroke="#2563eb" stroke-width="3" />
+
+              <!-- Isolated Domain 1: Side 2 of ISO1540 #1 to INA228 #1 (0x40) -->
+              <path id="wire_iso1_sda" class="wire-path bus-isolation1" d="M 640,770 H 670 V 930 H 570" stroke="#38bdf8" stroke-width="3" />
+              <path id="wire_iso1_scl" class="wire-path bus-isolation1" d="M 640,790 H 680 V 950 H 570" stroke="#facc15" stroke-width="3" />
+              <path id="wire_iso1_vcc" class="wire-path bus-isolation1" d="M 640,810 H 660 V 910 H 570" stroke="#93c5fd" stroke-width="2.5" />
+              <path id="wire_iso1_gnd" class="wire-path bus-isolation1" d="M 640,830 H 650 V 970 H 570" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="4,2" />
+
+              <!-- Isolated Domain 2: Side 2 of ISO1540 #2 to INA228 #2 (0x41) -->
+              <path id="wire_iso2_sda" class="wire-path bus-isolation2" d="M 1200,770 H 1230 V 930 H 1130" stroke="#c084fc" stroke-width="3" />
+              <path id="wire_iso2_scl" class="wire-path bus-isolation2" d="M 1200,790 H 1240 V 950 H 1130" stroke="#e9d5ff" stroke-width="3" />
+              <path id="wire_iso2_vcc" class="wire-path bus-isolation2" d="M 1200,810 H 1220 V 910 H 1130" stroke="#f3e8ff" stroke-width="2.5" />
+              <path id="wire_iso2_gnd" class="wire-path bus-isolation2" d="M 1200,830 H 1210 V 970 H 1130" stroke="#7e22ce" stroke-width="2.5" stroke-dasharray="4,2" />
+            </g>
+
+            <!-- ========================================== -->
+            <!-- HARDWARE COMPONENT MODULES & SHIELDS       -->
+            <!-- ========================================== -->
+
+            <!-- TOP ROW 1: LEM DHAB S/157 (x: 60, y: 70) -->
+            <g id="comp_dhab" class="cursor-pointer" onclick="selectComponent('dhab')">
+              <rect x="60" y="70" width="200" height="140" rx="10" fill="#0f172a" stroke="#0284c7" stroke-width="2.5" filter="url(#shadow)" />
+              <text x="160" y="96" font-size="12" font-weight="bold" fill="#f8fafc" text-anchor="middle">LEM DHAB S/157</text>
+              <text x="160" y="112" font-size="9" fill="#38bdf8" text-anchor="middle">Dual Hall: ±50A / ±500A</text>
+              <text x="160" y="126" font-size="8" fill="#34d399" font-weight="bold" text-anchor="middle">🛡️ Kontaktlös Hall-Mätning</text>
+
+              <rect x="70" y="145" width="180" height="50" rx="5" fill="#1e293b" stroke="#475569" />
+              <circle cx="100" cy="170" r="5" fill="#ef4444" />
+              <text x="100" y="188" font-size="8" fill="#fca5a5" text-anchor="middle">1: 5V</text>
+              <circle cx="130" cy="170" r="5" fill="#38bdf8" />
+              <text x="130" y="188" font-size="8" fill="#7dd3fc" text-anchor="middle">2: CH1</text>
+              <circle cx="160" cy="170" r="5" fill="#64748b" />
+              <text x="160" y="188" font-size="8" fill="#cbd5e1" text-anchor="middle">3: GND</text>
+              <circle cx="190" cy="170" r="5" fill="#3b82f6" />
+              <text x="190" y="188" font-size="8" fill="#93c5fd" text-anchor="middle">4: CH2</text>
+            </g>
+
+            <!-- TOP ROW 2: DHAB RC FILTER MODUL (x: 300, y: 75) -->
+            <g id="comp_rc_dhab" class="cursor-pointer" onclick="selectComponent('rc_dhab')">
+              <rect x="300" y="75" width="210" height="130" rx="8" fill="#1e293b" stroke="#e2e8f0" stroke-dasharray="3,3" stroke-width="1.8" filter="url(#shadow)" />
+              <text x="405" y="98" font-size="11" font-weight="bold" fill="#e2e8f0" text-anchor="middle">DHAB RC Filter Modul</text>
+              <text x="405" y="115" font-size="8.5" fill="#94a3b8" text-anchor="middle">CH1 (±50A): 10k:20k + 100nF</text>
+              <text x="405" y="155" font-size="8.5" fill="#94a3b8" text-anchor="middle">CH2 (±500A): 10k:20k + 100nF</text>
+              <text x="405" y="185" font-size="8.5" fill="#34d399" font-weight="bold" text-anchor="middle">fc = 238 Hz (Till Feather Pin 5 & 6)</text>
+              <circle cx="300" cy="120" r="4.5" fill="#38bdf8" />
+              <circle cx="300" cy="160" r="4.5" fill="#3b82f6" />
+              <circle cx="510" cy="120" r="4.5" fill="#38bdf8" />
+              <circle cx="510" cy="160" r="4.5" fill="#3b82f6" />
+            </g>
+
+            <!-- TOP ROW 3: STEP-UP 3.3V -> 5.0V CONVERTER (x: 580, y: 75) -->
+            <g id="comp_stepup" class="cursor-pointer" onclick="selectComponent('stepup')">
+              <rect x="580" y="75" width="180" height="130" rx="8" fill="#1e1b4b" stroke="#ef4444" stroke-width="2.2" filter="url(#shadow)" />
+              <text x="670" y="98" font-size="12" font-weight="bold" fill="#fca5a5" text-anchor="middle">Step-Up DC/DC</text>
+              <text x="670" y="114" font-size="9" fill="#f87171" text-anchor="middle">3.3V → 5.0V Boost</text>
+              
+              <rect x="590" y="130" width="70" height="24" rx="4" fill="#047857" stroke="#34d399" />
+              <text x="625" y="146" font-size="9" font-weight="bold" fill="#ecfdf5" text-anchor="middle">22 µF VIN</text>
+              <text x="670" y="185" font-size="8" fill="#cbd5e1" text-anchor="middle">Mellan 3V och GND</text>
+              
+              <circle cx="580" cy="115" r="4.5" fill="#f97316" />
+              <text x="590" y="108" font-size="7.5" fill="#fdba74">VIN (3V)</text>
+              <circle cx="580" cy="155" r="4.5" fill="#64748b" />
+              <text x="590" y="170" font-size="7.5" fill="#cbd5e1">GND</text>
+
+              <circle cx="760" cy="115" r="4.5" fill="#ef4444" />
+              <text x="750" y="108" font-size="7.5" fill="#fca5a5" text-anchor="end">5.0V UT</text>
+              <circle cx="760" cy="155" r="4.5" fill="#64748b" />
+              <text x="750" y="170" font-size="7.5" fill="#cbd5e1" text-anchor="end">GND</text>
+            </g>
+
+            <!-- TOP ROW 4: 5V BULK CAPACITOR RESERVOIR (x: 810, y: 75) -->
+            <g id="comp_cap_bank" class="cursor-pointer" onclick="selectComponent('stepup')">
+              <rect x="810" y="75" width="180" height="130" rx="8" fill="#0f172a" stroke="#10b981" stroke-width="2" filter="url(#shadow)" />
+              <text x="900" y="98" font-size="11" font-weight="bold" fill="#34d399" text-anchor="middle">5V Reservoarfilter</text>
+              
+              <rect x="835" y="118" width="36" height="48" rx="4" fill="#1e293b" stroke="#38bdf8" stroke-width="1.8" />
+              <text x="853" y="145" font-size="10" font-weight="bold" fill="#38bdf8" text-anchor="middle">100µF</text>
+              <text x="853" y="158" font-size="7.5" fill="#94a3b8" text-anchor="middle">16V</text>
+
+              <rect x="895" y="128" width="22" height="32" rx="3" fill="#ca8a04" stroke="#eab308" />
+              <text x="906" y="148" font-size="8" font-weight="bold" fill="#000" text-anchor="middle">100n</text>
+
+              <text x="900" y="188" font-size="8" fill="#94a3b8" text-anchor="middle">Mellan 5V och GND</text>
+              <circle cx="810" cy="115" r="4.5" fill="#ef4444" />
+              <circle cx="810" cy="155" r="4.5" fill="#64748b" />
+              <circle cx="990" cy="115" r="4.5" fill="#ef4444" />
+              <circle cx="990" cy="155" r="4.5" fill="#64748b" />
+            </g>
+
+            <!-- TOP ROW 5: HO-100 RC FILTER (x: 1060, y: 75) -->
+            <g id="comp_rc_ho100" class="cursor-pointer" onclick="selectComponent('rc_ho')">
+              <rect x="1060" y="75" width="200" height="130" rx="8" fill="#1e293b" stroke="#e2e8f0" stroke-dasharray="3,3" stroke-width="1.8" filter="url(#shadow)" />
+              <text x="1160" y="98" font-size="11" font-weight="bold" fill="#e2e8f0" text-anchor="middle">HO-100 RC Filter</text>
+              <text x="1160" y="125" font-size="9" fill="#94a3b8" text-anchor="middle">10kΩ:20kΩ + 100nF</text>
+              <text x="1160" y="150" font-size="8.5" fill="#2dd4bf" font-weight="bold" text-anchor="middle">Till Feather Pin A5</text>
+              <text x="1160" y="182" font-size="8" fill="#34d399" text-anchor="middle">fc = 238 Hz</text>
+              <circle cx="1260" cy="140" r="4.5" fill="#14b8a6" />
+              <circle cx="1060" cy="140" r="4.5" fill="#14b8a6" />
+            </g>
+
+            <!-- TOP ROW 6: LEM HO-100-S SENSOR (x: 1320, y: 70) -->
+            <g id="comp_ho100" class="cursor-pointer" onclick="selectComponent('ho100')">
+              <rect x="1320" y="70" width="200" height="140" rx="10" fill="#0f172a" stroke="#0d9488" stroke-width="2.5" filter="url(#shadow)" />
+              <text x="1420" y="96" font-size="12" font-weight="bold" fill="#f8fafc" text-anchor="middle">LEM HO-100-S</text>
+              <text x="1420" y="112" font-size="9" fill="#2dd4bf" text-anchor="middle">Aux Clamp: ±100A (8mV/A)</text>
+              <text x="1420" y="126" font-size="8" fill="#34d399" font-weight="bold" text-anchor="middle">🛡️ Kontaktlös Hall-Mätning</text>
+
+              <rect x="1330" y="145" width="180" height="50" rx="5" fill="#1e293b" stroke="#475569" />
+              <circle cx="1360" cy="170" r="5" fill="#ef4444" />
+              <text x="1360" y="188" font-size="8" fill="#fca5a5" text-anchor="middle">1: 5V</text>
+              <circle cx="1400" cy="170" r="5" fill="#64748b" />
+              <text x="1400" y="188" font-size="8" fill="#cbd5e1" text-anchor="middle">2: GND</text>
+              <circle cx="1440" cy="170" r="5" fill="#14b8a6" />
+              <text x="1440" y="188" font-size="8" fill="#5eead4" text-anchor="middle">3: OUT</text>
+              <circle cx="1480" cy="170" r="5" fill="#64748b" />
+              <text x="1480" y="188" font-size="8" fill="#94a3b8" text-anchor="middle">4: REF</text>
+            </g>
+
+            <!-- ======================================================== -->
+            <!-- MIDDLE ROW: BUTTONS, LCD, FEATHER MCU, ADALOGGER WING    -->
+            <!-- ======================================================== -->
+
+            <!-- MIDDLE 1: KNAPPAR MODUL (x: 60, y: 370) -->
+            <g id="comp_buttons" class="cursor-pointer" onclick="selectComponent('buttons')">
+              <rect x="60" y="370" width="140" height="230" rx="10" fill="#1e293b" stroke="#cbd5e1" stroke-width="1.8" filter="url(#shadow)" />
+              <text x="130" y="395" font-size="11" font-weight="bold" fill="#f8fafc" text-anchor="middle">KNAPPAR</text>
+              <text x="130" y="410" font-size="8" fill="#94a3b8" text-anchor="middle">Till Feather A1, A2, A3</text>
+
+              <circle cx="95" cy="450" r="14" fill="#334155" stroke="#94a3b8" stroke-width="2" />
+              <text x="95" y="455" font-size="10" font-weight="bold" fill="#ffffff" text-anchor="middle">A1</text>
+              <text x="135" y="445" font-size="8.5" fill="#e2e8f0">Vänster</text>
+              <text x="135" y="456" font-size="7" fill="#38bdf8">1.5s: Zero</text>
+              <circle cx="200" cy="460" r="4.5" fill="#cbd5e1" />
+
+              <circle cx="95" cy="510" r="14" fill="#334155" stroke="#94a3b8" stroke-width="2" />
+              <text x="95" y="515" font-size="10" font-weight="bold" fill="#ffffff" text-anchor="middle">A2</text>
+              <text x="135" y="505" font-size="8.5" fill="#e2e8f0">Meny/Logg</text>
+              <text x="135" y="516" font-size="7" fill="#38bdf8">2.0s: Wi-Fi</text>
+              <circle cx="200" cy="485" r="4.5" fill="#cbd5e1" />
+
+              <circle cx="95" cy="570" r="14" fill="#334155" stroke="#94a3b8" stroke-width="2" />
+              <text x="95" y="575" font-size="10" font-weight="bold" fill="#ffffff" text-anchor="middle">A3</text>
+              <text x="135" y="565" font-size="8.5" fill="#e2e8f0">Höger</text>
+              <text x="135" y="576" font-size="7" fill="#94a3b8">Nästa sida</text>
+              <circle cx="200" cy="510" r="4.5" fill="#cbd5e1" />
+            </g>
+
+            <!-- MIDDLE 2: GC9A01 1.28" RUND DISPLAY (Center: 360, 440) -->
+            <g id="comp_lcd" class="cursor-pointer" onclick="selectComponent('lcd')">
+              <circle cx="360" cy="440" r="82" fill="#020617" stroke="#6366f1" stroke-width="3.5" filter="url(#shadow)" />
+              <circle cx="360" cy="440" r="75" fill="#0f172a" />
+              
+              <text x="360" y="420" font-size="18" font-weight="bold" fill="#38bdf8" text-anchor="middle">24.8 A</text>
+              <text x="360" y="440" font-size="13" font-weight="semibold" fill="#e2e8f0" text-anchor="middle">51.2 V</text>
+              <text x="360" y="460" font-size="10" fill="#10b981" text-anchor="middle">● REC [02:14:05]</text>
+              <text x="360" y="478" font-size="9" fill="#94a3b8" text-anchor="middle">P1/5: INA + LEM</text>
+
+              <!-- Display Pins Header -->
+              <rect x="250" y="540" width="220" height="36" rx="5" fill="#1e293b" stroke="#475569" />
+              <circle cx="270" cy="558" r="4.5" fill="#f97316" />
+              <text x="270" y="572" font-size="7.5" fill="#fdba74" text-anchor="middle">VCC</text>
+
+              <circle cx="300" cy="558" r="4.5" fill="#64748b" />
+              <text x="300" y="572" font-size="7.5" fill="#cbd5e1" text-anchor="middle">GND</text>
+
+              <circle cx="330" cy="558" r="4.5" fill="#a855f7" />
+              <text x="330" y="572" font-size="7.5" fill="#d8b4fe" text-anchor="middle">SCL</text>
+
+              <circle cx="360" cy="558" r="4.5" fill="#10b981" />
+              <text x="360" y="572" font-size="7.5" fill="#6ee7b7" text-anchor="middle">SDA</text>
+
+              <circle cx="390" cy="558" r="4.5" fill="#6366f1" />
+              <text x="390" y="572" font-size="7.5" fill="#a5b4fc" text-anchor="middle">CS</text>
+
+              <circle cx="420" cy="558" r="4.5" fill="#ec4899" />
+              <text x="420" y="572" font-size="7.5" fill="#f472b6" text-anchor="middle">DC</text>
+
+              <circle cx="450" cy="558" r="4.5" fill="#f59e0b" />
+              <text x="450" y="572" font-size="7.5" fill="#fcd34d" text-anchor="middle">BLK</text>
+            </g>
+
+            <!-- MIDDLE 3: ADAFRUIT FEATHER ESP32-S3 (EXAKT FYSISKA PINNAMN) -->
+            <g id="comp_feather" class="cursor-pointer" onclick="selectComponent('feather')">
+              <rect x="660" y="295" width="290" height="425" rx="14" fill="#1e293b" stroke="#3b82f6" stroke-width="2.5" filter="url(#shadow)" />
+              <rect x="770" y="285" width="70" height="18" rx="5" fill="#475569" stroke="#94a3b8" stroke-width="1.5" />
+              <text x="805" y="297" font-size="9" fill="#e2e8f0" font-weight="bold" text-anchor="middle">USB-C</text>
+              
+              <text x="805" y="330" font-size="14" font-weight="bold" fill="#f8fafc" text-anchor="middle">Adafruit Feather</text>
+              <text x="805" y="347" font-size="11" font-weight="semibold" fill="#38bdf8" text-anchor="middle">ESP32-S3 (Fysiska Pinnamn)</text>
+
+              <!-- NeoPixel -->
+              <circle cx="805" cy="380" r="7" fill="#10b981" stroke="#34d399" stroke-width="2" class="animate-pulse" />
+              <text x="805" y="398" font-size="8.5" fill="#94a3b8" text-anchor="middle">RGB LED (GPIO 33)</text>
+
+              <!-- VÄNSTER HEADER (EXAKT SOM PÅ KORTET) -->
+              <g font-size="9.5" font-family="monospace" fill="#cbd5e1" font-weight="600">
+                <text x="672" y="339">RST</text>
+                <text x="672" y="364">3V (3.3V) 🟠</text>
+                <text x="672" y="389">ARF</text>
+                <text x="672" y="414">GND ⚫</text>
+                <text x="672" y="439">A0 (IO18)</text>
+                <text x="672" y="464">A1 (IO17) ⚪ Vänster</text>
+                <text x="672" y="489">A2 (IO16) ⚪ Meny/WiFi</text>
+                <text x="672" y="514">A3 (IO15) ⚪ Höger</text>
+                <text x="672" y="539">A4 (IO14) 🟡 LCD BLK</text>
+                <text x="672" y="564">A5 (IO8)  🟢 HO-100</text>
+                <text x="672" y="589">SCK (IO36) 🟣 SPI</text>
+                <text x="672" y="614">MO (IO35)  🟢 MOSI</text>
+                <text x="672" y="639">MI (IO37)  🔵 MISO</text>
+                <text x="672" y="664">RX (IO38)</text>
+                <text x="672" y="689">TX (IO39)</text>
+              </g>
+
+              <!-- HÖGER HEADER (EXAKT SOM PÅ KORTET) -->
+              <g font-size="9.5" font-family="monospace" fill="#cbd5e1" font-weight="600" text-anchor="end">
+                <text x="938" y="339">BAT (LiPo)</text>
+                <text x="938" y="364">EN</text>
+                <text x="938" y="389">USB (5V) 🔴</text>
+                <text x="938" y="414">13 (Röd LED)</text>
+                <text x="938" y="439">12 (IO12) 🟣 LCD CS</text>
+                <text x="938" y="464">11 (IO11)</text>
+                <text x="938" y="489">10 (IO10) 🟢 SD CS</text>
+                <text x="938" y="514">9  (IO9)  🌸 LCD DC</text>
+                <text x="938" y="539">6  (IO6)  🔷 DHAB CH2</text>
+                <text x="938" y="564">5  (IO5)  🔵 DHAB CH1</text>
+                <text x="938" y="589">SCL (IO4) 🟡 I2C</text>
+                <text x="938" y="614">SDA (IO3) 🔵 I2C</text>
+              </g>
+
+              <!-- Left Pin Terminals -->
+              <circle cx="660" cy="335" r="4.5" fill="#64748b" class="pin-hover" />
+              <circle cx="660" cy="360" r="5" fill="#f97316" class="pin-hover" onclick="showPinDetails('3V (3.3V Logik-utgång)')" />
+              <circle cx="660" cy="385" r="4.5" fill="#64748b" class="pin-hover" />
+              <circle cx="660" cy="410" r="5" fill="#64748b" class="pin-hover" onclick="showPinDetails('GND (Systemjord)')" />
+              <circle cx="660" cy="435" r="4.5" fill="#cbd5e1" class="pin-hover" />
+              <circle cx="660" cy="460" r="5" fill="#cbd5e1" class="pin-hover" onclick="showPinDetails('A1 (Knapp Vänster / Tare)')" />
+              <circle cx="660" cy="485" r="5" fill="#cbd5e1" class="pin-hover" onclick="showPinDetails('A2 (Knapp Meny / Wi-Fi)')" />
+              <circle cx="660" cy="510" r="5" fill="#cbd5e1" class="pin-hover" onclick="showPinDetails('A3 (Knapp Höger / Nästa)')" />
+              <circle cx="660" cy="535" r="5" fill="#f59e0b" class="pin-hover" onclick="showPinDetails('A4 (LCD Bakgrundsbelysning BLK)')" />
+              <circle cx="660" cy="560" r="5" fill="#14b8a6" class="pin-hover" onclick="showPinDetails('A5 (LEM HO-100-S ADC)')" />
+              <circle cx="660" cy="585" r="5" fill="#a855f7" class="pin-hover" onclick="showPinDetails('SCK (SPI Klocka)')" />
+              <circle cx="660" cy="610" r="5" fill="#10b981" class="pin-hover" onclick="showPinDetails('MO / MOSI (SPI Master Ut)')" />
+              <circle cx="660" cy="635" r="5" fill="#06b6d4" class="pin-hover" onclick="showPinDetails('MI / MISO (SPI Master In)')" />
+              <circle cx="660" cy="660" r="4.5" fill="#64748b" class="pin-hover" />
+              <circle cx="660" cy="685" r="4.5" fill="#64748b" class="pin-hover" />
+
+              <!-- Right Pin Terminals -->
+              <circle cx="950" cy="335" r="4.5" fill="#f97316" class="pin-hover" />
+              <circle cx="950" cy="360" r="4.5" fill="#64748b" class="pin-hover" />
+              <circle cx="950" cy="385" r="5" fill="#ef4444" class="pin-hover" onclick="showPinDetails('USB (5V från USB-C)')" />
+              <circle cx="950" cy="410" r="4.5" fill="#ef4444" class="pin-hover" />
+              <circle cx="950" cy="435" r="5" fill="#6366f1" class="pin-hover" onclick="showPinDetails('Pin 12 (LCD Chip Select)')" />
+              <circle cx="950" cy="460" r="4.5" fill="#64748b" class="pin-hover" />
+              <circle cx="950" cy="485" r="5" fill="#84cc16" class="pin-hover" onclick="showPinDetails('Pin 10 (Adalogger MicroSD CS)')" />
+              <circle cx="950" cy="510" r="5" fill="#ec4899" class="pin-hover" onclick="showPinDetails('Pin 9 (LCD Data/Command DC)')" />
+              <circle cx="950" cy="535" r="5" fill="#3b82f6" class="pin-hover" onclick="showPinDetails('Pin 6 (LEM DHAB CH2 ±500A)')" />
+              <circle cx="950" cy="560" r="5" fill="#38bdf8" class="pin-hover" onclick="showPinDetails('Pin 5 (LEM DHAB CH1 ±50A)')" />
+              <circle cx="950" cy="585" r="5" fill="#eab308" class="pin-hover" onclick="showPinDetails('Pin SCL (I2C Klocka)')" />
+              <circle cx="950" cy="610" r="5" fill="#2563eb" class="pin-hover" onclick="showPinDetails('Pin SDA (I2C Data)')" />
+            </g>
+
+            <!-- MIDDLE 4: ADAFRUIT ADALOGGER FEATHERWING (x: 1100, y: 300) -->
+            <g id="comp_adalogger" class="cursor-pointer" onclick="selectComponent('adalogger')">
+              <rect x="1100" y="300" width="260" height="370" rx="14" fill="#1e293b" stroke="#10b981" stroke-width="2.5" filter="url(#shadow)" />
+              <rect x="1115" y="315" width="230" height="28" rx="5" fill="#064e3b" />
+              <text x="1230" y="333" font-size="11" font-weight="bold" fill="#34d399" text-anchor="middle">SD + RTC I SAMMA MODUL</text>
+
+              <text x="1230" y="365" font-size="13" font-weight="bold" fill="#f8fafc" text-anchor="middle">Adalogger FeatherWing</text>
+              <text x="1230" y="382" font-size="9" fill="#94a3b8" text-anchor="middle">Electrokit Art.nr: 41016309</text>
+
+              <circle cx="1230" cy="430" r="28" fill="#334155" stroke="#94a3b8" stroke-width="2.2" />
+              <text x="1230" y="435" font-size="10" fill="#f8fafc" font-weight="bold" text-anchor="middle">CR1220</text>
+              <text x="1230" y="475" font-size="9" fill="#e2e8f0" font-weight="bold" text-anchor="middle">RTC PCF8523 (I2C 0x68)</text>
+
+              <rect x="1145" y="500" width="170" height="70" rx="6" fill="#0f172a" stroke="#64748b" stroke-width="1.8" />
+              <text x="1230" y="530" font-size="11" font-weight="bold" fill="#38bdf8" text-anchor="middle">MicroSD Kortplats</text>
+              <text x="1230" y="550" font-size="9.5" fill="#84cc16" font-weight="bold" text-anchor="middle">CS: Kopplas till Pin 10</text>
+
+              <circle cx="1100" cy="370" r="5" fill="#f97316" />
+              <circle cx="1100" cy="400" r="5" fill="#64748b" />
+              <circle cx="1100" cy="430" r="5" fill="#eab308" />
+              <circle cx="1100" cy="460" r="5" fill="#2563eb" />
+              <circle cx="1100" cy="490" r="5" fill="#84cc16" />
+              <circle cx="1100" cy="520" r="5" fill="#a855f7" />
+              <circle cx="1100" cy="550" r="5" fill="#10b981" />
+              <circle cx="1100" cy="580" r="5" fill="#06b6d4" />
+
+              <g font-size="9.5" font-family="monospace" fill="#94a3b8">
+                <text x="1115" y="374">3.3V Power</text>
+                <text x="1115" y="404">GND</text>
+                <text x="1115" y="434">SCL (I2C 0x68)</text>
+                <text x="1115" y="464">SDA (I2C 0x68)</text>
+                <text x="1115" y="494">SD CS (Pin 10)</text>
+                <text x="1115" y="524">SCK (SPI)</text>
+                <text x="1115" y="554">MOSI (MO)</text>
+                <text x="1115" y="584">MISO (MI)</text>
+              </g>
+            </g>
+
+            <!-- ======================================================== -->
+            <!-- BOTTOM ROW: 2x ISO1540 ISOLATORER & 2x ISOLERADE ZONER   -->
+            <!-- ======================================================== -->
+
+            <!-- BOTTOM 1: ISOLATOR #1 (ISO1540) (x: 420, y: 745) -->
+            <g id="comp_iso1" class="cursor-pointer" onclick="selectComponent('iso1')">
+              <rect x="420" y="745" width="220" height="110" rx="10" fill="#1e1b4b" stroke="#3b82f6" stroke-width="2.2" filter="url(#shadow)" />
+              <line x1="530" y1="745" x2="530" y2="855" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4,3" />
+              
+              <text x="530" y="768" font-size="11.5" font-weight="bold" fill="#93c5fd" text-anchor="middle">ISO1540 #1 (I2C)</text>
+              <text x="530" y="784" font-size="9" fill="#60a5fa" text-anchor="middle">Isolerar INA 0x40</text>
+              <text x="530" y="800" font-size="8.5" fill="#f59e0b" text-anchor="middle">2.5kV Galvanisk Barriär</text>
+              <text x="530" y="835" font-size="16" text-anchor="middle">🛡️</text>
+
+              <circle cx="420" cy="770" r="4.5" fill="#2563eb" />
+              <text x="430" y="774" font-size="8" fill="#93c5fd">SDA1 (från SDA)</text>
+              <circle cx="420" cy="790" r="4.5" fill="#eab308" />
+              <text x="430" y="794" font-size="8" fill="#fde047">SCL1 (från SCL)</text>
+              <circle cx="420" cy="810" r="4.5" fill="#f97316" />
+              <text x="430" y="814" font-size="8" fill="#fdba74">3.3V (från 3V)</text>
+              <circle cx="420" cy="830" r="4.5" fill="#64748b" />
+              <text x="430" y="834" font-size="8" fill="#cbd5e1">GND (MCU)</text>
+
+              <circle cx="640" cy="770" r="4.5" fill="#38bdf8" />
+              <text x="630" y="774" font-size="8" fill="#7dd3fc" text-anchor="end">SDA2</text>
+              <circle cx="640" cy="790" r="4.5" fill="#facc15" />
+              <text x="630" y="794" font-size="8" fill="#fef08a" text-anchor="end">SCL2</text>
+              <circle cx="640" cy="810" r="4.5" fill="#93c5fd" />
+              <text x="630" y="814" font-size="8" fill="#bfdbfe" text-anchor="end">VCC2</text>
+              <circle cx="640" cy="830" r="4.5" fill="#2563eb" />
+              <text x="630" y="834" font-size="8" fill="#93c5fd" text-anchor="end">GND2</text>
+            </g>
+
+            <!-- BOTTOM 2: INA228 #1 (0x40) (x: 400, y: 905) -->
+            <g id="comp_ina1" class="cursor-pointer" onclick="selectComponent('ina1')">
+              <rect x="400" y="905" width="260" height="150" rx="10" fill="#1e293b" stroke="#3b82f6" stroke-width="2.2" filter="url(#shadow)" />
+              <text x="530" y="930" font-size="13" font-weight="bold" fill="#f8fafc" text-anchor="middle">INA228 #1 (Iso)</text>
+              <text x="530" y="946" font-size="9.5" fill="#60a5fa" text-anchor="middle">I2C: 0x40 (Huvudmätning)</text>
+              <text x="530" y="960" font-size="8.5" fill="#38bdf8" text-anchor="middle">Galvaniskt isolerad mätjord</text>
+
+              <rect x="430" y="980" width="200" height="55" rx="5" fill="#0f172a" stroke="#64748b" stroke-width="1.5" />
+              <text x="530" y="1005" font-size="11" font-weight="bold" fill="#38bdf8" text-anchor="middle">BAT SHUNT 1 IN±</text>
+              <text x="530" y="1022" font-size="8" fill="#94a3b8" text-anchor="middle">0 - 85V Busspänning</text>
+
+              <circle cx="570" cy="910" r="4" fill="#93c5fd" />
+              <circle cx="570" cy="930" r="4" fill="#38bdf8" />
+              <circle cx="570" cy="950" r="4" fill="#facc15" />
+              <circle cx="570" cy="970" r="4" fill="#2563eb" />
+            </g>
+
+            <!-- BOTTOM 3: ISOLATOR #2 (ISO1540) (x: 980, y: 745) -->
+            <g id="comp_iso2" class="cursor-pointer" onclick="selectComponent('iso2')">
+              <rect x="980" y="745" width="220" height="110" rx="10" fill="#1e1b4b" stroke="#a855f7" stroke-width="2.2" filter="url(#shadow)" />
+              <line x1="1090" y1="745" x2="1090" y2="855" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4,3" />
+
+              <text x="1090" y="768" font-size="11.5" font-weight="bold" fill="#d8b4fe" text-anchor="middle">ISO1540 #2 (I2C)</text>
+              <text x="1090" y="784" font-size="9" fill="#c084fc" text-anchor="middle">Isolerar INA 0x41</text>
+              <text x="1090" y="800" font-size="8.5" fill="#f59e0b" text-anchor="middle">2.5kV Galvanisk Barriär</text>
+              <text x="1090" y="835" font-size="16" text-anchor="middle">🛡️</text>
+
+              <circle cx="980" cy="770" r="4.5" fill="#2563eb" />
+              <text x="990" y="774" font-size="8" fill="#93c5fd">SDA1 (från SDA)</text>
+              <circle cx="980" cy="790" r="4.5" fill="#eab308" />
+              <text x="990" y="794" font-size="8" fill="#fde047">SCL1 (från SCL)</text>
+              <circle cx="980" cy="810" r="4.5" fill="#f97316" />
+              <text x="990" y="814" font-size="8" fill="#fdba74">3.3V (från 3V)</text>
+              <circle cx="980" cy="830" r="4.5" fill="#64748b" />
+              <text x="990" y="834" font-size="8" fill="#cbd5e1">GND (MCU)</text>
+
+              <circle cx="1200" cy="770" r="4.5" fill="#c084fc" />
+              <text x="1190" y="774" font-size="8" fill="#e9d5ff" text-anchor="end">SDA2</text>
+              <circle cx="1200" cy="790" r="4.5" fill="#e9d5ff" />
+              <text x="1190" y="794" font-size="8" fill="#f3e8ff" text-anchor="end">SCL2</text>
+              <circle cx="1200" cy="810" r="4.5" fill="#f3e8ff" />
+              <text x="1190" y="814" font-size="8" fill="#faf5ff" text-anchor="end">VCC2</text>
+              <circle cx="1200" cy="830" r="4.5" fill="#7e22ce" />
+              <text x="1190" y="834" font-size="8" fill="#c084fc" text-anchor="end">GND2</text>
+            </g>
+
+            <!-- BOTTOM 4: INA228 #2 (0x41) (x: 960, y: 905) -->
+            <g id="comp_ina2" class="cursor-pointer" onclick="selectComponent('ina2')">
+              <rect x="960" y="905" width="260" height="150" rx="10" fill="#1e293b" stroke="#a855f7" stroke-width="2.2" filter="url(#shadow)" />
+              <text x="1090" y="930" font-size="13" font-weight="bold" fill="#f8fafc" text-anchor="middle">INA228 #2 (Iso)</text>
+              <text x="1090" y="946" font-size="9.5" fill="#c084fc" text-anchor="middle">I2C: 0x41 (A0 Byglad till VS)</text>
+              <text x="1090" y="960" font-size="8.5" fill="#e9d5ff" text-anchor="middle">Helt oberoende jord från Shunt 1</text>
+
+              <rect x="990" y="980" width="200" height="55" rx="5" fill="#0f172a" stroke="#64748b" stroke-width="1.5" />
+              <text x="1090" y="1005" font-size="11" font-weight="bold" fill="#a855f7" text-anchor="middle">AUX SHUNT 2 IN±</text>
+              <text x="1090" y="1022" font-size="8" fill="#94a3b8" text-anchor="middle">Laddare / Generator / 12V</text>
+
+              <circle cx="1130" cy="910" r="4" fill="#f3e8ff" />
+              <circle cx="1130" cy="930" r="4" fill="#c084fc" />
+              <circle cx="1130" cy="950" r="4" fill="#e9d5ff" />
+              <circle cx="1130" cy="970" r="4" fill="#7e22ce" />
+            </g>
+
+          </g> <!-- End of zoomGroup -->
+
+        </svg>
+
+        <!-- Floating Legend Pill -->
+        <div class="absolute bottom-3 left-3 bg-slate-950/90 backdrop-blur-md px-3 py-2 rounded-lg border border-slate-800 text-xs flex items-center gap-3 shadow-lg pointer-events-none">
+          <div class="flex items-center gap-1.5"><span class="w-3 h-1 bg-red-500 rounded"></span><span class="text-slate-300">5V Step-Up</span></div>
+          <div class="flex items-center gap-1.5"><span class="w-3 h-1 bg-amber-500 rounded"></span><span class="text-slate-300">🛡️ 2x Isolator</span></div>
+          <div class="flex items-center gap-1.5"><span class="w-3 h-1 bg-blue-500 rounded"></span><span class="text-slate-300">Zon 1 (0x40)</span></div>
+          <div class="flex items-center gap-1.5"><span class="w-3 h-1 bg-purple-500 rounded"></span><span class="text-slate-300">Zon 2 (0x41)</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inspector & Component Details Panel (3.5 Cols) -->
+    <div class="lg:col-span-4 flex flex-col gap-4">
+
+      <!-- Dynamic Info Card -->
+      <div id="inspectorCard" class="bg-slate-900 rounded-xl border border-slate-800 p-4 shadow-sm flex flex-col">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+          <div>
+            <h2 id="inspectorTitle" class="text-base font-bold text-white">Välj stift eller modul</h2>
+            <p id="inspectorSubtitle" class="text-xs text-slate-400">Klicka på en pinne eller kabel i schemat för detaljer</p>
+          </div>
+          <span id="inspectorTag" class="px-2 py-0.5 text-xs font-semibold rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">INFO</span>
+        </div>
+
+        <div id="inspectorContent" class="py-3 text-xs space-y-3 flex-1 overflow-y-auto max-h-[320px]">
+          <p class="text-slate-400 leading-relaxed">
+            Feather ESP32-S3 är nu utritad med <strong>de exakta stiftnamn som står stämplade på kortet</strong> (Silkscreen).
+          </p>
+          <div class="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-2">
+            <div>📍 <strong>Vänster rad:</strong> RST, 3V, ARF, GND, A0, A1, A2, A3, A4, A5, SCK, MO, MI, RX, TX.</div>
+            <div>📍 <strong>Höger rad:</strong> BAT, EN, USB, 13, 12, 11, 10, 9, 6, 5, SCL, SDA.</div>
+            <div>🔘 <strong>Knappar:</strong> A1 (Tare), A2 (Meny/WiFi), A3 (Nästa).</div>
+            <div>📺 <strong>Display:</strong> 12 (CS), 9 (DC), A4 (BLK), SCK (SCL), MO (SDA).</div>
+            <div>💾 <strong>Adalogger:</strong> 10 (SD CS), SCL/SDA (RTC 0x68).</div>
+            <div>🧲 <strong>LEM-sensorer:</strong> Pin 5 (DHAB1), Pin 6 (DHAB2), Pin A5 (HO-100).</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Zoom Navigation Hints -->
+      <div class="bg-slate-900 rounded-xl border border-slate-800 p-4 shadow-sm flex flex-col">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+          <h3 class="text-sm font-bold text-white">Navigering & Tips</h3>
+          <span class="text-xs px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 font-semibold border border-blue-500/20">Interaktiv</span>
+        </div>
+        
+        <div class="pt-3 text-xs space-y-2 text-slate-400">
+          <ul class="space-y-1.5 list-disc list-inside">
+            <li><strong>Zooma in/ut:</strong> Rulla med mushjulet över schemat, eller använd knapparna <kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-mono font-bold">+</kbd> och <kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-400 font-mono font-bold">−</kbd>.</li>
+            <li><strong>Panorera:</strong> Håll ner vänster musknapp och dra för att flytta runt i schemat när du zoomat in på detaljer.</li>
+            <li><strong>Återställ:</strong> Klicka på <kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">↺ Återställ</kbd> för att centrera schemat.</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Complete Pinout & Wiring Table (Silkscreen Pin Names) -->
+  <div class="mt-6 bg-slate-900 rounded-xl border border-slate-800 p-4 shadow-sm">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-bold text-white">Komplett Kopplingslista & Fysiska Pinnamn</h3>
+      <input type="text" id="tableSearch" onkeyup="filterTable()" placeholder="Sök stift (t.ex. A1, 10, 5, SCL)..." class="px-3 py-1 text-xs rounded-lg bg-slate-950 border border-slate-700 text-slate-200 w-64 focus:outline-none focus:ring-1 focus:ring-blue-500">
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs border-collapse" id="wiringTable">
+        <thead>
+          <tr class="border-b border-slate-800 text-slate-400 font-semibold">
+            <th class="p-2">Feather Stift (Silkscreen)</th>
+            <th class="p-2">Signal & Funktion</th>
+            <th class="p-2">Kabelfärg</th>
+            <th class="p-2">Destination (Kopplas till)</th>
+            <th class="p-2">Buss / Zon</th>
+            <th class="p-2">Notering / Komponent</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800 font-mono text-[11px]" id="tableBody">
+          <!-- Populated by JS -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- JavaScript Engine -->
+  <script>
+    let scale = 1.0;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+
+    const svgContainer = document.getElementById('svgContainer');
+    const zoomGroup = document.getElementById('zoomGroup');
+    const zoomLevelDisplay = document.getElementById('zoomLevelDisplay');
+
+    function updateTransform() {
+      zoomGroup.setAttribute('transform', `translate(${panX}, ${panY}) scale(${scale})`);
+      zoomLevelDisplay.innerText = `${Math.round(scale * 100)}%`;
+    }
+
+    function zoomIn() {
+      scale = Math.min(scale * 1.25, 5.0);
+      updateTransform();
+    }
+
+    function zoomOut() {
+      scale = Math.max(scale / 1.25, 0.4);
+      updateTransform();
+    }
+
+    function resetZoomPan() {
+      scale = 1.0;
+      panX = 0;
+      panY = 0;
+      updateTransform();
+      setBusFilter('all');
+    }
+
+    svgContainer.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = svgContainer.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+      const newScale = Math.min(Math.max(scale * zoomFactor, 0.4), 5.0);
+
+      panX = mouseX - (mouseX - panX) * (newScale / scale);
+      panY = mouseY - (mouseY - panY) * (newScale / scale);
+      scale = newScale;
+
+      updateTransform();
+    }, { passive: false });
+
+    svgContainer.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.cursor-pointer') && !e.shiftKey) return;
+      isDragging = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+      svgContainer.classList.remove('grab-cursor');
+      svgContainer.classList.add('grabbing-cursor');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      updateTransform();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        svgContainer.classList.remove('grabbing-cursor');
+        svgContainer.classList.add('grab-cursor');
+      }
+    });
+
+    // Touch Support
+    let initialTouchDist = null;
+    let initialTouchScale = 1.0;
+
+    svgContainer.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        isDragging = true;
+        startX = e.touches[0].clientX - panX;
+        startY = e.touches[0].clientY - panY;
+      } else if (e.touches.length === 2) {
+        isDragging = false;
+        initialTouchDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        initialTouchScale = scale;
+      }
+    }, { passive: true });
+
+    svgContainer.addEventListener('touchmove', (e) => {
+      if (isDragging && e.touches.length === 1) {
+        panX = e.touches[0].clientX - startX;
+        panY = e.touches[0].clientY - startY;
+        updateTransform();
+      } else if (e.touches.length === 2 && initialTouchDist) {
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const factor = dist / initialTouchDist;
+        scale = Math.min(Math.max(initialTouchScale * factor, 0.4), 5.0);
+        updateTransform();
+      }
+    }, { passive: true });
+
+    svgContainer.addEventListener('touchend', () => {
+      isDragging = false;
+      initialTouchDist = null;
+    });
+
+    function toggleFullScreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        }
+      }
+    }
+
+    // Exact Silkscreen Names from Feather ESP32-S3 Board
+    const wiringData = [
+      { feather: "Pin 5 (GPIO 5)", signal: "DHAB CH1 (±50A)", color: "Himmelsblå (Sky Blue)", hex: "#38bdf8", dest: "LEM DHAB Pin 2 (via 10k:20k RC-filter)", bus: "Analog", note: "Känsligt mätområde (40mV/A)" },
+      { feather: "Pin 6 (GPIO 6)", signal: "DHAB CH2 (±500A)", color: "Marinblå (Navy)", hex: "#3b82f6", dest: "LEM DHAB Pin 4 (via 10k:20k RC-filter)", bus: "Analog", note: "Högströmsområde (4mV/A)" },
+      { feather: "Pin A5 (GPIO 8)", signal: "LEM HO-100 OUT", color: "Teal (Teal)", hex: "#14b8a6", dest: "LEM HO-100-S Pin 3 (via 10k:20k RC-filter)", bus: "Analog", note: "Hjälpström ±100A (8mV/A)" },
+      
+      { feather: "Pin 10 (GPIO 10)", signal: "MicroSD CS", color: "Limegrön (Lime)", hex: "#84cc16", dest: "Adalogger FeatherWing MicroSD CS", bus: "SPI", note: "Hårdvarubanat direkt på Adalogger" },
+      { feather: "Pin 12 (GPIO 12)", signal: "LCD CS", color: "Indigo (Indigo)", hex: "#6366f1", dest: "GC9A01 Display CS", bus: "SPI", note: "Dedikerad Chip Select för skärmen" },
+      { feather: "Pin 9 (GPIO 9)", signal: "LCD DC", color: "Rosa (Pink)", hex: "#ec4899", dest: "GC9A01 Display DC", bus: "SPI", note: "Data/Kommando-växling" },
+      { feather: "Pin A4 (GPIO 14)", signal: "LCD Backlight (BLK)", color: "Bärnsten (Amber)", hex: "#f59e0b", dest: "GC9A01 Display BLK", bus: "SPI", note: "Mjukvarustyrd dimning/skärmsläckare" },
+      { feather: "Pin SCK (GPIO 36)", signal: "SPI Clock", color: "Lila (Purple)", hex: "#a855f7", dest: "GC9A01 SCL & Adalogger SCK", bus: "SPI", note: "Delad SPI-klocka (skyddad med Mutex)" },
+      { feather: "Pin MO (GPIO 35)", signal: "SPI MOSI", color: "Smaragdgrön (Emerald)", hex: "#10b981", dest: "GC9A01 SDA & Adalogger MOSI", bus: "SPI", note: "Master Out till skärm och SD" },
+      { feather: "Pin MI (GPIO 37)", signal: "SPI MISO", color: "Ljuscyan (Cyan)", hex: "#06b6d4", dest: "Adalogger MicroSD MISO", bus: "SPI", note: "Returdata från SD-kortet" },
+
+      { feather: "Pin SCL (GPIO 4)", signal: "I2C SCL", color: "Gul (Yellow)", hex: "#eab308", dest: "Adalogger RTC PCF8523, ISO1 SCL1, ISO2 SCL1", bus: "I2C", note: "400 kHz Fast-Mode klocka" },
+      { feather: "Pin SDA (GPIO 3)", signal: "I2C SDA", color: "Kungsblå (Royal Blue)", hex: "#2563eb", dest: "Adalogger RTC PCF8523, ISO1 SDA1, ISO2 SDA1", bus: "I2C", note: "Delad master I2C-buss (RTC 0x68)" },
+
+      { feather: "Pin A1 (GPIO 17)", signal: "Knapp Vänster", color: "Vit/Ljusgrå (White)", hex: "#cbd5e1", dest: "Knapp 1 -> GND", bus: "Buttons", note: "Kort: Föreg. sida / 1.5s: ZERO/TARE" },
+      { feather: "Pin A2 (GPIO 16)", signal: "Knapp Meny", color: "Vit/Ljusgrå (White)", hex: "#cbd5e1", dest: "Knapp 2 -> GND", bus: "Buttons", note: "Kort: Start/Stopp / 2.0s: Wi-Fi Av/På" },
+      { feather: "Pin A3 (GPIO 15)", signal: "Knapp Höger", color: "Vit/Ljusgrå (White)", hex: "#cbd5e1", dest: "Knapp 3 -> GND", bus: "Buttons", note: "Kort: Nästa sida i gränssnittet" },
+
+      { feather: "Pin 3V (3.3V)", signal: "3.3V Logik-utgång", color: "Orange (Orange)", hex: "#f97316", dest: "Step-Up VIN, LCD VCC, Adalogger 3V, ISO1/2 VCC1", bus: "Power", note: "22 µF kondensator till GND vid Step-Up" },
+      { feather: "Pin GND", signal: "Systemjord (GND)", color: "Svart/Grå (Slate)", hex: "#64748b", dest: "Gemensam jord för MCU, LCD, Adalogger, Knappar", bus: "Power", note: "MCU-zonens referensjord" },
+      { feather: "Pin USB (5V)", signal: "USB 5V Utgång", color: "Röd (Red)", hex: "#ef4444", dest: "(Aktiv vid ansluten USB-C kabel)", bus: "Power", note: "Kan ladda LiPo-batteri eller ge 5V" }
+    ];
+
+    const tableBody = document.getElementById('tableBody');
+    function renderTable(items) {
+      tableBody.innerHTML = items.map(item => `
+        <tr class="hover:bg-slate-800/60 transition cursor-pointer" onclick="highlightSignal('${item.signal}')">
+          <td class="p-2 font-bold text-cyan-400">${item.feather}</td>
+          <td class="p-2 font-semibold text-white">${item.signal}</td>
+          <td class="p-2 flex items-center gap-2">
+            <span class="w-3.5 h-3.5 rounded-full inline-block border border-black/30" style="background-color: ${item.hex}"></span>
+            <span>${item.color}</span>
+          </td>
+          <td class="p-2 text-slate-200">${item.dest}</td>
+          <td class="p-2"><span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">${item.bus}</span></td>
+          <td class="p-2 text-slate-400">${item.note}</td>
+        </tr>
+      `).join('');
+    }
+    renderTable(wiringData);
+
+    function filterTable() {
+      const query = document.getElementById('tableSearch').value.toLowerCase();
+      const filtered = wiringData.filter(i => 
+        i.feather.toLowerCase().includes(query) ||
+        i.signal.toLowerCase().includes(query) ||
+        i.color.toLowerCase().includes(query) ||
+        i.dest.toLowerCase().includes(query) ||
+        i.bus.toLowerCase().includes(query)
+      );
+      renderTable(filtered);
+    }
+
+    function setBusFilter(busName) {
+      document.querySelectorAll('#busFilterGroup button').forEach(btn => {
+        if(btn.dataset.bus === busName) {
+          btn.className = "filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-blue-600 text-white shadow-sm transition";
+        } else {
+          btn.className = "filter-btn px-3 py-1 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition border border-slate-700";
+        }
+      });
+
+      const paths = document.querySelectorAll('.wire-path');
+      paths.forEach(p => {
+        p.classList.remove('wire-highlighted', 'wire-pulse');
+        if (busName === 'all') {
+          p.classList.remove('wire-dimmed');
+        } else if (p.classList.contains(`bus-${busName}`)) {
+          p.classList.remove('wire-dimmed');
+          p.classList.add('wire-pulse');
+        } else {
+          p.classList.add('wire-dimmed');
+        }
+      });
+
+      const badge = document.getElementById('activeWireBadge');
+      if (busName === 'all') {
+        badge.classList.add('hidden');
+      } else {
+        badge.classList.remove('hidden');
+        document.getElementById('activeWireText').innerText = `Buss: ${busName.toUpperCase()}`;
+      }
+    }
+
+    const componentDetails = {
+      stepup: {
+        title: "3.3V → 5.0V Step-Up & Kondensatorer",
+        subtitle: "Placering av 22µF och 100µF kondensatorerna",
+        tag: "POWER BOOST",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p><strong>Var ska kondensatorerna sitta?</strong></p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800 space-y-2">
+              <div>
+                <strong class="text-emerald-400">1. 22 µF Kondensator:</strong> Sätts på <strong>Step-Up omvandlarens INGÅNG (Feather 3V till GND)</strong>.<br>
+                <span class="text-xs text-slate-400">Boost-kretsen switchar hårt och drar strömpulser. 22µF direkt på 3V-ingången förhindrar att Step-Up:en drar ner Feather-kortets 3.3V rail och skapar rippel på mikrokontrollern och ADC.</span>
+              </div>
+              <div class="border-t border-slate-800 pt-1.5">
+                <strong class="text-cyan-400">2. 100 µF Kondensator:</strong> Sätts på <strong>Step-Up omvandlarens UTGÅNG (5.0V till GND)</strong>.<br>
+                <span class="text-xs text-slate-400">Fungerar som en stor energireservoar för LEM-sensorerna. Håller 5.00V helt stabil så att LEM-sensorernas 2.50V vilospänning inte faller vid SD-skrivning.</span>
+              </div>
+            </div>
+          </div>
+        `
+      },
+      iso1: {
+        title: "ISO1540 #1 (Galvanisk Isolator 1)",
+        subtitle: "Isolerar INA228 #1 (I2C 0x40)",
+        tag: "ISOLATOR 1",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p><strong>Separerar Shunt 1 från mikrokontrollern och datorns USB!</strong></p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800 space-y-1">
+              <div>• <strong>Sida 1 (Feather):</strong> Kopplas till 3V, GND, SDA, SCL.</div>
+              <div>• <strong>Sida 2 (Mätzub):</strong> Kopplas till INA228 #1 på isolerad jord (GND_ISO1).</div>
+              <div>• <strong>Spänningsbarriär:</strong> 2500 V-RMS.</div>
+            </div>
+          </div>
+        `
+      },
+      iso2: {
+        title: "ISO1540 #2 (Galvanisk Isolator 2)",
+        subtitle: "Isolerar INA228 #2 (I2C 0x41)",
+        tag: "ISOLATOR 2",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p><strong>Separerar Shunt 2 från både mikrokontrollern och Shunt 1!</strong></p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800 space-y-1">
+              <div>• <strong>Sida 1 (Feather):</strong> Parallellkopplad med Feather I2C (SDA/SCL) på MCU-sidan.</div>
+              <div>• <strong>Sida 2 (Mätzub):</strong> Kopplas till INA228 #2 på sin egen jord (GND_ISO2).</div>
+              <div>• <strong>Fördel:</strong> Ingen risk för jordslinga mellan Shunt 1 och Shunt 2.</div>
+            </div>
+          </div>
+        `
+      },
+      ina1: {
+        title: "INA228 #1 (Isolerad Zon 1)",
+        subtitle: "I2C Adress 0x40 (Shunt 1)",
+        tag: "ISO SENSOR 1",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Mäter spänning och ström på Krets 1 (t.ex. huvudbatteri).</p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+              Jordad mot Shunt 1 referens (GND_ISO1). Ingen kontakt med MCU eller Shunt 2.
+            </div>
+          </div>
+        `
+      },
+      ina2: {
+        title: "INA228 #2 (Isolerad Zon 2)",
+        subtitle: "I2C Adress 0x41 (Shunt 2)",
+        tag: "ISO SENSOR 2",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Mäter spänning och ström på Krets 2 (t.ex. hjälpsystem eller laddare).</p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+              A0 byglad till VS för adress 0x41. Jordad mot Shunt 2 referens (GND_ISO2).
+            </div>
+          </div>
+        `
+      },
+      feather: {
+        title: "Adafruit Feather ESP32-S3",
+        subtitle: "Fysiska Pinnamn och Silkscreen",
+        tag: "MCU",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Pinnarna i schemat är nu märkta exakt som de heter på kortet:</p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800 space-y-1">
+              <div>• <strong>Höger rad:</strong> Pin 5 (DHAB1), Pin 6 (DHAB2), Pin 9 (LCD DC), Pin 10 (SD CS), Pin 12 (LCD CS), Pin SCL, Pin SDA.</div>
+              <div>• <strong>Vänster rad:</strong> Pin A1 (Vänster/Tare), Pin A2 (Meny/WiFi), Pin A3 (Höger), Pin A4 (LCD BLK), Pin A5 (HO-100), SCK, MO, MI, 3V, GND.</div>
+            </div>
+          </div>
+        `
+      },
+      adalogger: {
+        title: "Adalogger FeatherWing (SD + RTC)",
+        subtitle: "MicroSD & PCF8523 på samma kort",
+        tag: "STORAGE & RTC",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Monteras direkt på eller ansluts med kablar till Feather:</p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800 space-y-1">
+              <div>• <strong>SD CS:</strong> Kopplas till <strong>Pin 10</strong> på Feather.</div>
+              <div>• <strong>SPI:</strong> SCK, MO (MOSI), MI (MISO).</div>
+              <div>• <strong>RTC:</strong> SCL och SDA (PCF8523 på 0x68).</div>
+            </div>
+          </div>
+        `
+      },
+      dhab: {
+        title: "LEM DHAB S/157 Hall-Sensor",
+        subtitle: "Kontaktlös Mätning (±50A / ±500A)",
+        tag: "HALL SENSOR",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Kopplas till 5V Step-Up och Feather Pin 5 och Pin 6:</p>
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800">
+              CH1 (±50A) går till <strong>Pin 5</strong>. CH2 (±500A) går till <strong>Pin 6</strong> (båda via 10k:20k RC-filter).
+            </div>
+          </div>
+        `
+      },
+      ho100: {
+        title: "LEM HO-100-S Hall-Sensor",
+        subtitle: "Kontaktlös Mätning (±100A, 8mV/A)",
+        tag: "HALL SENSOR",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Kopplas till 5V Step-Up och Feather <strong>Pin A5</strong> via sitt 10k:20k RC-filter.</p>
+          </div>
+        `
+      },
+      rc_dhab: {
+        title: "DHAB RC-Filter Modul",
+        subtitle: "10kΩ:20kΩ Delare + 100nF Lågpassfilter",
+        tag: "RC FILTER",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Sänker LEM 0-5V signal till 0-3.3V och filtrerar vid fc = 238 Hz. Utgångarna går till <strong>Pin 5</strong> och <strong>Pin 6</strong>.</p>
+          </div>
+        `
+      },
+      rc_ho: {
+        title: "HO-100 RC-Filter Modul",
+        subtitle: "10kΩ:20kΩ Delare + 100nF Lågpassfilter",
+        tag: "RC FILTER",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Sänker LEM HO-100 0-5V signal till 0-3.3V. Utgången går till <strong>Pin A5</strong>.</p>
+          </div>
+        `
+      },
+      lcd: {
+        title: "GC9A01 1.28\" Display",
+        subtitle: "Rund SPI Färgskärm (240x240)",
+        tag: "DISPLAY",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <div class="p-2.5 rounded bg-slate-950 border border-slate-800 space-y-1">
+              <div>• <strong>CS:</strong> Kopplas till <strong>Pin 12</strong>.</div>
+              <div>• <strong>DC:</strong> Kopplas till <strong>Pin 9</strong>.</div>
+              <div>• <strong>BLK:</strong> Kopplas till <strong>Pin A4</strong>.</div>
+              <div>• <strong>SCL / SDA:</strong> Kopplas till <strong>SCK</strong> och <strong>MO</strong>.</div>
+            </div>
+          </div>
+        `
+      },
+      buttons: {
+        title: "Användarknappar",
+        subtitle: "A1 (Tare), A2 (Logg/WiFi), A3 (Sida)",
+        tag: "INPUT",
+        content: `
+          <div class="space-y-2 text-slate-300">
+            <p>Kopplas till <strong>Pin A1</strong>, <strong>Pin A2</strong> och <strong>Pin A3</strong> med andra sidan till GND.</p>
+          </div>
+        `
+      }
+    };
+
+    function selectComponent(compKey) {
+      const data = componentDetails[compKey];
+      if (!data) return;
+      document.getElementById('inspectorTitle').innerText = data.title;
+      document.getElementById('inspectorSubtitle').innerText = data.subtitle;
+      document.getElementById('inspectorTag').innerText = data.tag;
+      document.getElementById('inspectorContent').innerHTML = data.content;
+    }
+
+    function showPinDetails(pinName) {
+      document.getElementById('inspectorTitle').innerText = pinName;
+      document.getElementById('inspectorSubtitle').innerText = "Anslutningspunkt på Feather ESP32-S3";
+      document.getElementById('inspectorTag').innerText = "PIN INFO";
+      document.getElementById('inspectorContent').innerHTML = `
+        <div class="p-2.5 rounded bg-slate-950 border border-slate-800 text-slate-300">
+          Klicka i kopplingsschemat eller i tabellen nedan för att se tillhörande signalkabel och färgkod.
+        </div>
+      `;
+    }
+
+    function highlightSignal(sigName) {
+      const item = wiringData.find(w => w.signal === sigName);
+      if (!item) return;
+
+      document.querySelectorAll('.wire-path').forEach(p => p.classList.add('wire-dimmed'));
+
+      if (item.bus === 'Step-Up') {
+        document.querySelectorAll('.bus-stepup').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'Power') {
+        document.querySelectorAll('.bus-power').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'I2C') {
+        document.querySelectorAll('.bus-i2c').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'Isolation 1') {
+        document.querySelectorAll('.bus-isolation1').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'Isolation 2') {
+        document.querySelectorAll('.bus-isolation2').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'SPI') {
+        document.querySelectorAll('.bus-spi').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'Analog') {
+        document.querySelectorAll('.bus-analog').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      } else if (item.bus === 'Buttons') {
+        document.querySelectorAll('.bus-buttons').forEach(p => { p.classList.remove('wire-dimmed'); p.classList.add('wire-highlighted'); });
+      }
+
+      document.getElementById('inspectorTitle').innerText = item.feather;
+      document.getElementById('inspectorSubtitle').innerText = `${item.signal} (Kabelfärg: ${item.color})`;
+      document.getElementById('inspectorTag').innerText = item.bus.toUpperCase();
+      document.getElementById('inspectorContent').innerHTML = `
+        <div class="space-y-2">
+          <div class="p-2.5 rounded bg-slate-950 border border-slate-800 text-slate-300">
+            <div><strong>Stift på kortet:</strong> ${item.feather}</div>
+            <div><strong>Funktion:</strong> ${item.signal}</div>
+            <div><strong>Destination:</strong> ${item.dest}</div>
+            <div><strong>Färgkod:</strong> <span style="color:${item.hex}; font-weight:bold;">${item.color}</span></div>
+            <div class="mt-1 text-slate-400"><strong>Notering:</strong> ${item.note}</div>
+          </div>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>

@@ -8,7 +8,10 @@ from openpyxl.chart import LineChart, Reference
 
 def analyze_telemetry(csv_path, output_excel, threshold_a=5.0):
     print(f"[*] Loading Multi-Channel CSV telemetry: {csv_path}")
-    df = pd.read_csv(csv_path)
+    try:
+        df = pd.read_csv(csv_path, on_bad_lines="skip")
+    except TypeError:
+        df = pd.read_csv(csv_path, error_bad_lines=False, warn_bad_lines=False)
 
     total_samples = len(df)
     start_time = df['Timestamp_ISO'].iloc[0] if 'Timestamp_ISO' in df else "N/A"

@@ -3,15 +3,27 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Feather ESP32-S3 Onboard Power Gate for STEMMA QT / I2C
-#define PIN_I2C_POWER           7  // Must be driven HIGH to power STEMMA QT devices!
+extern SemaphoreHandle_t g_spi_bus_mutex;
 
-// I2C Pin Definitions (Feather STEMMA QT)
+// Navigation & User Input Buttons
+#define PIN_BUTTON_A0           18 // Pin A0 on Feather (Guarded input)
+#define PIN_BUTTON_LEFT         17 // Pin A1 on Feather (Short: Prev Page, Long 1.5s: ZERO/TARE)
+#define PIN_BUTTON_MENU         16 // Pin A2 on Feather (Short: Start/Stop Log, Long 2.0s: Toggle Wi-Fi)
+#define PIN_BUTTON_RIGHT        15 // Pin A3 on Feather (Next Page)
+
+// Feather ESP32-S3 Onboard Power Gates
+#define PIN_I2C_POWER           7  // Must be HIGH to power STEMMA QT devices!
+#define PIN_NEOPIXEL_PWR        21 // Must be HIGH to power onboard NeoPixel!
+#define PIN_RGB_LED             33 // Onboard WS2812 NeoPixel data pin
+
+// I2C Bus Pins (Feather STEMMA QT)
 #define I2C_PORT_NUM            I2C_NUM_0
 #define PIN_I2C_SDA             3
 #define PIN_I2C_SCL             4
@@ -25,22 +37,17 @@ extern "C" {
 #define PIN_LCD_RST             -1
 #define PIN_LCD_BL              14
 
-// SPI MicroSD Card Pins (Adafruit 254 Breakout)
+// SPI MicroSD Card Pins (Adalogger FeatherWing default)
 #define PIN_SD_MOSI             35
 #define PIN_SD_MISO             37
 #define PIN_SD_SCLK             36
-#define PIN_SD_CS               11
+#define PIN_SD_CS               10 // Adalogger FeatherWing default CS is Pin 10 (GPIO 10)
 
-// Analog LEM Sensors Pin Definitions
+// Analog LEM Sensors Pin Definitions (ADC1)
 #define PIN_DHAB_CH1_ADC        ADC_CHANNEL_4 // GPIO 5 (DHAB S/157 High-Sensitivity +/-50A)
 #define PIN_DHAB_CH2_ADC        ADC_CHANNEL_5 // GPIO 6 (DHAB S/157 High-Current +/-500A)
 #define PIN_HO100_ADC           ADC_CHANNEL_7 // GPIO 8 / Pin A5 on Feather (LEM HO-100-S +/-100A)
 #define PIN_BATTERY_ADC         ADC_CHANNEL_0 // GPIO 1 (Feather Onboard VBAT Divider)
-
-// 3 User Navigation Buttons (Active Low to GND)
-#define PIN_BUTTON_LEFT         17 // Pin A1 on Feather (Short: Prev Page, Long 1.5s: ZERO/TARE)
-#define PIN_BUTTON_MENU         16 // Pin A2 on Feather (Start / Stop Logging)
-#define PIN_BUTTON_RIGHT        15 // Pin A3 on Feather (Next Page)
 
 // Multi-Channel Telemetry Record Structure
 typedef struct {
@@ -81,6 +88,7 @@ typedef struct {
     float    total_power_w;
     float    battery_v;
     uint8_t  battery_pct;
+    bool     is_charging;
 } telemetry_record_t;
 
 // Logging Mode Enum
@@ -99,7 +107,10 @@ typedef struct {
     bool         ina1_online;
     bool         ina2_online;
     bool         low_battery_warning;
-    uint8_t      ui_screen; // 0: Overview, 1: Dual INA, 2: LEM Hall, 3: System Status
+    bool         is_charging;
+    bool         screen_dimmed;
+    bool         wifi_portal_active;
+    uint8_t      ui_screen; // 0: Overview, 1: Dual INA, 2: LEM Hall, 3: Wi-Fi Portal, 4: System Status
     uint32_t     records_written;
     uint32_t     queue_overflow_count;
     char         current_log_filename[64];
