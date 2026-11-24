@@ -80,72 +80,201 @@ CHANNEL_INFO = {
     }
 }
 
+def _trapz(y, x):
+    """Compat wrapper for NumPy 2.x (trapezoid) and 1.x (trapz)."""
+    if hasattr(np, "trapezoid"):
+        return np.trapezoid(y, x)
+    return np.trapz(y, x)
+
+
+def _detect_csv_format(text):
+    """Auto-detects column separator (';' or ',') and decimal char ('.' or ',')."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ",", ".", text
+
+    sep = None
+    if lines[0].lower().startswith("sep=") and len(lines[0]) >= 5:
+        sep = lines[0][4]
+        text = "\n".join(lines[1:])
+        lines = lines[1:]
+
+    if not lines:
+        return (sep or ","), ".", text
+
+    header = lines[0]
+    if sep is None:
+        sep = ";" if header.count(";") >= header.count(",") else ","
+
+    decimal = "."
+    if sep == ";":
+        # Check numeric columns (after col 0 Timestamp_ISO) for decimal commas
+        comma_hits = 0
+        dot_hits = 0
+        for sample_line in lines[1:6]:
+            parts = sample_line.split(";")
+            for val in parts[1:]:
+                if "," in val:
+                    comma_hits += 1
+                if "." in val:
+                    dot_hits += 1
+        if comma_hits > dot_hits:
+            decimal = ","
+
+    return sep, decimal, text
+
+
 def load_log_file(filepath):
     """Loads and sanitizes CSV log file into a pandas DataFrame."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File not found: {filepath}")
 
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+    with open(filepath, "r", encoding="utf-8-sig", errors="replace") as f:
         content = f.read()
 
+    sep, decimal, clean_content = _detect_csv_format(content)
+
     # Repair rows where a newline was dropped between timestamps (e.g. from UART buffer overrun)
-    fixed_content = re.sub(r'([^\r\n])(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', r'\1\n\2', content)
+    fixed_content = re.sub(r'([^\r\n])(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', r'\1\n\2', clean_content)
 
     try:
-        df = pd.read_csv(io.StringIO(fixed_content), on_bad_lines="skip")
+        df = pd.read_csv(
+            io.StringIO(fixed_content),
+            sep=sep,
+            decimal=decimal,
+            on_bad_lines="skip",
+            low_memory=False,
+        )
     except TypeError:
-        df = pd.read_csv(io.StringIO(fixed_content), error_bad_lines=False, warn_bad_lines=False)
+        df = pd.read_csv(
+            io.StringIO(fixed_content),
+            sep=sep,
+            decimal=decimal,
+            error_bad_lines=False,
+            warn_bad_lines=False,
+            low_memory=False,
+        )
 
     df.columns = [c.strip() for c in df.columns]
+
+    numeric_cols = [
+        "Unix_ms", "Sample_Idx",
+        "INA1_V", "INA1_A", "INA1_W",
+        "INA2_V", "INA2_A", "INA2_W",
+        "DHAB_Low_A", "DHAB_High_A", "DHAB_A",
+        "HO100_A", "Total_Current_A", "Total_Power_W",
+        "Batt_V", "Batt_Pct",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    before_len = len(df)
+    valid_mask = pd.Series(True, index=df.index)
+    if "Sample_Idx" in df.columns:
+        valid_mask &= df["Sample_Idx"].notna()
 
     # Convert timestamp
     if "Timestamp_ISO" in df.columns:
         df["DateTime"] = pd.to_datetime(df["Timestamp_ISO"], errors="coerce")
-        if not df["DateTime"].isna().all():
-            t0 = df["DateTime"].iloc[0]
-            df["Time_Sec"] = (df["DateTime"] - t0).dt.total_seconds()
-        else:
-            df["Time_Sec"] = df.index * 0.1
-    elif "Unix_ms" in df.columns:
+        if before_len > 0 and not df["DateTime"].isna().all():
+            valid_mask &= df["DateTime"].notna()
+
+    present_val_cols = [c for c in ["INA1_A", "INA2_A", "DHAB_A", "HO100_A", "Total_Current_A", "Batt_V"] if c in df.columns]
+    if present_val_cols and before_len > 0:
+        valid_mask &= df[present_val_cols].notna().any(axis=1)
+
+    df = df[valid_mask].reset_index(drop=True)
+    skipped_rows = before_len - len(df)
+
+    if len(df) == 0:
+        df["Time_Sec"] = pd.Series(dtype=float)
+    elif "DateTime" in df.columns and not df["DateTime"].isna().all():
+        t0 = df["DateTime"].iloc[0]
+        df["Time_Sec"] = (df["DateTime"] - t0).dt.total_seconds()
+    elif "Unix_ms" in df.columns and not df["Unix_ms"].isna().all():
         t0 = df["Unix_ms"].iloc[0]
         df["Time_Sec"] = (df["Unix_ms"] - t0) / 1000.0
     else:
-        df["Time_Sec"] = df.index * 0.1
+        df["Time_Sec"] = df.index * 0.5
 
+    df.attrs["skipped_rows"] = skipped_rows
     return df
+
+
+def apply_polarity_inversion(df, invert_dhab=False, invert_ho100=False):
+    """Returns a copy of df with LEM DHAB and/or HO-100-S polarities inverted and totals recomputed."""
+    if df is None:
+        return None
+    out = df.copy()
+    if not invert_dhab and not invert_ho100:
+        out.attrs = dict(df.attrs)
+        return out
+
+    if invert_dhab:
+        for col in ("DHAB_Low_A", "DHAB_High_A", "DHAB_A"):
+            if col in out.columns:
+                out[col] = -out[col]
+
+    if invert_ho100 and "HO100_A" in out.columns:
+        out["HO100_A"] = -out["HO100_A"]
+
+    zeros = pd.Series(0.0, index=out.index)
+    ina1_a = out["INA1_A"].fillna(0.0) if "INA1_A" in out.columns else zeros
+    ina2_a = out["INA2_A"].fillna(0.0) if "INA2_A" in out.columns else zeros
+    dhab_a = out["DHAB_A"].fillna(0.0) if "DHAB_A" in out.columns else zeros
+    ho100_a = out["HO100_A"].fillna(0.0) if "HO100_A" in out.columns else zeros
+
+    if "Total_Current_A" in out.columns:
+        out["Total_Current_A"] = ina1_a + ina2_a + dhab_a + ho100_a
+
+    if "Total_Power_W" in out.columns:
+        ina1_w = out["INA1_W"].fillna(0.0) if "INA1_W" in out.columns else zeros
+        ina2_w = out["INA2_W"].fillna(0.0) if "INA2_W" in out.columns else zeros
+        ina1_v = out["INA1_V"].fillna(0.0) if "INA1_V" in out.columns else zeros
+        ina2_v = out["INA2_V"].fillna(0.0) if "INA2_V" in out.columns else zeros
+        v_primary = np.where(ina1_v > 0.5, ina1_v, np.where(ina2_v > 0.5, ina2_v, 12.0))
+        out["Total_Power_W"] = ina1_w + ina2_w + v_primary * (dhab_a + ho100_a)
+
+    out.attrs = dict(df.attrs)
+    return out
+
 
 def compute_statistics(df):
     """Computes comprehensive statistics and energy metrics (Ah, Wh)."""
     stats = {}
-    time_span_s = df["Time_Sec"].max() - df["Time_Sec"].min() if len(df) > 1 else 0
+    if len(df) > 1:
+        time_span_s = float(df["Time_Sec"].max() - df["Time_Sec"].min())
+    else:
+        time_span_s = 0.0
 
     stats["Duration_Sec"] = time_span_s
-    stats["Duration_Str"] = str(datetime.timedelta(seconds=int(time_span_s)))
+    stats["Duration_Str"] = str(datetime.timedelta(seconds=int(max(0.0, time_span_s))))
     stats["Total_Samples"] = len(df)
-    stats["Sample_Rate_Hz"] = (len(df) / time_span_s) if time_span_s > 0 else 0
+    stats["Sample_Rate_Hz"] = (len(df) / time_span_s) if time_span_s > 0 else 0.0
 
     current_cols = ["INA1_A", "INA2_A", "DHAB_Low_A", "DHAB_High_A", "DHAB_A", "HO100_A", "Total_Current_A"]
     stats["Channels"] = {}
 
     for col in current_cols:
-        if col in df.columns:
-            s = df[col]
-            ah = np.trapezoid(s, df["Time_Sec"]) / 3600.0 if len(df) > 1 else 0.0
+        if col in df.columns and len(df) > 0:
+            s = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            ah = float(_trapz(s, df["Time_Sec"]) / 3600.0) if len(df) > 1 else 0.0
             stats["Channels"][col] = {
-                "min": s.min(),
-                "max": s.max(),
-                "mean": s.mean(),
-                "std": s.std(),
+                "min": float(s.min()),
+                "max": float(s.max()),
+                "mean": float(s.mean()),
+                "std": float(s.std()) if len(df) > 1 else 0.0,
                 "ah": ah
             }
 
-    if "Total_Power_W" in df.columns:
-        p = df["Total_Power_W"]
-        wh = np.trapezoid(p, df["Time_Sec"]) / 3600.0 if len(df) > 1 else 0.0
+    if "Total_Power_W" in df.columns and len(df) > 0:
+        p = pd.to_numeric(df["Total_Power_W"], errors="coerce").fillna(0.0)
+        wh = float(_trapz(p, df["Time_Sec"]) / 3600.0) if len(df) > 1 else 0.0
         stats["Power"] = {
-            "min": p.min(),
-            "max": p.max(),
-            "mean": p.mean(),
+            "min": float(p.min()),
+            "max": float(p.max()),
+            "mean": float(p.mean()),
             "wh": wh
         }
 
@@ -348,8 +477,8 @@ def export_html_report(df, csv_path, output_html=None):
         </div>
         <div class="kpi-card">
             <div class="label">Logger Battery</div>
-            <div class="value" style="color: var(--accent-cyan);">{plot_df['Batt_V'].iloc[-1] if 'Batt_V' in plot_df else 0:.2f} V</div>
-            <div class="sub">18650 Pack: {plot_df['Batt_Pct'].iloc[-1] if 'Batt_Pct' in plot_df else 0}% remaining</div>
+            <div class="value" style="color: var(--accent-cyan);">{plot_df['Batt_V'].iloc[-1] if ('Batt_V' in plot_df and len(plot_df) > 0) else 0:.2f} V</div>
+            <div class="sub">18650 Pack: {int(plot_df['Batt_Pct'].iloc[-1]) if ('Batt_Pct' in plot_df and len(plot_df) > 0) else 0}% remaining</div>
         </div>
     </div>
 
@@ -586,7 +715,7 @@ def export_excel_report(df, csv_path, output_xlsx=None):
     print(f"  [OK] Exported Excel Workbook with Charts -> {output_xlsx}")
     return output_xlsx
 
-def launch_gui_viewer(csv_path=None):
+def launch_gui_viewer(csv_path=None, invert_dhab=False, invert_ho100=False):
     """Launches an interactive desktop viewer using Tkinter & Matplotlib."""
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
@@ -595,11 +724,15 @@ def launch_gui_viewer(csv_path=None):
 
     root = tk.Tk()
     root.title("VAM Multi-Channel Telemetry Graph Viewer")
-    root.geometry("1100x750")
+    root.geometry("1160x760")
     root.configure(bg="#0f172a")
 
     current_file = [csv_path]
+    raw_df = [None]
     current_df = [None]
+
+    var_inv_dhab = tk.BooleanVar(value=invert_dhab)
+    var_inv_ho100 = tk.BooleanVar(value=invert_ho100)
 
     # Top Control Bar
     ctrl_frame = tk.Frame(root, bg="#1e293b", pady=8, padx=12)
@@ -648,6 +781,12 @@ def launch_gui_viewer(csv_path=None):
             for spine in ax.spines.values():
                 spine.set_color("#334155")
 
+        if len(df) == 0:
+            ax_curr.set_title("No valid telemetry rows in this CSV file", color="#f87171", fontsize=11)
+            fig.tight_layout()
+            canvas.draw()
+            return
+
         t = df["Time_Sec"]
 
         # Plot Currents
@@ -658,16 +797,20 @@ def launch_gui_viewer(csv_path=None):
         if "INA2_A" in df:
             ax_curr.plot(t, df["INA2_A"], label="INA2 Shunt", color="#fb923c", linewidth=1.4)
         if "DHAB_Low_A" in df:
-            ax_curr.plot(t, df["DHAB_Low_A"], label="DHAB Low (±50A)", color="#4ade80", linewidth=1.4)
+            lbl = "DHAB Low (±50A) [INV]" if var_inv_dhab.get() else "DHAB Low (±50A)"
+            ax_curr.plot(t, df["DHAB_Low_A"], label=lbl, color="#4ade80", linewidth=1.4)
         if "DHAB_High_A" in df:
-            ax_curr.plot(t, df["DHAB_High_A"], label="DHAB High (±500A)", color="#15803d", linewidth=1.4, linestyle=":")
+            lbl = "DHAB High (±500A) [INV]" if var_inv_dhab.get() else "DHAB High (±500A)"
+            ax_curr.plot(t, df["DHAB_High_A"], label=lbl, color="#15803d", linewidth=1.4, linestyle=":")
         elif "DHAB_A" in df:
-            ax_curr.plot(t, df["DHAB_A"], label="DHAB Clamp", color="#4ade80", linewidth=1.4)
+            lbl = "DHAB Clamp [INV]" if var_inv_dhab.get() else "DHAB Clamp"
+            ax_curr.plot(t, df["DHAB_A"], label=lbl, color="#4ade80", linewidth=1.4)
         if "HO100_A" in df:
-            ax_curr.plot(t, df["HO100_A"], label="HO100 Clamp", color="#f87171", linewidth=1.4)
+            lbl = "HO100 Clamp [INV]" if var_inv_ho100.get() else "HO100 Clamp"
+            ax_curr.plot(t, df["HO100_A"], label=lbl, color="#f87171", linewidth=1.4)
 
         ax_curr.set_ylabel("Current (A)", color="#f8fafc", fontsize=11, fontweight="bold")
-        leg1 = ax_curr.legend(loc="upper right", facecolor="#1e293b", edgecolor="#334155", labelcolor="#f8fafc")
+        ax_curr.legend(loc="upper right", facecolor="#1e293b", edgecolor="#334155", labelcolor="#f8fafc")
 
         # Plot Voltages
         if "INA1_V" in df:
@@ -679,10 +822,20 @@ def launch_gui_viewer(csv_path=None):
 
         ax_volt.set_ylabel("Voltage (V)", color="#f8fafc", fontsize=11, fontweight="bold")
         ax_volt.set_xlabel("Time (Seconds)", color="#94a3b8", fontsize=11)
-        leg2 = ax_volt.legend(loc="upper right", facecolor="#1e293b", edgecolor="#334155", labelcolor="#f8fafc")
+        ax_volt.legend(loc="upper right", facecolor="#1e293b", edgecolor="#334155", labelcolor="#f8fafc")
 
         fig.tight_layout()
         canvas.draw()
+
+    def recompute_active_df():
+        if raw_df[0] is None:
+            return
+        current_df[0] = apply_polarity_inversion(
+            raw_df[0],
+            invert_dhab=var_inv_dhab.get(),
+            invert_ho100=var_inv_ho100.get(),
+        )
+        update_plot()
 
     def open_file_dialog():
         p = filedialog.askopenfilename(
@@ -696,10 +849,12 @@ def launch_gui_viewer(csv_path=None):
     def load_file(p):
         try:
             df = load_log_file(p)
-            current_df[0] = df
+            raw_df[0] = df
             current_file[0] = p
-            lbl_file.config(text=f"Loaded: {os.path.basename(p)} ({len(df)} records)")
-            update_plot()
+            skipped = df.attrs.get("skipped_rows", 0)
+            skip_info = f", {skipped} corrupt skipped" if skipped > 0 else ""
+            lbl_file.config(text=f"Loaded: {os.path.basename(p)} ({len(df)} records{skip_info})")
+            recompute_active_df()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load CSV:\n{e}")
 
@@ -728,6 +883,20 @@ def launch_gui_viewer(csv_path=None):
     btn_excel = tk.Button(ctrl_frame, text="📊 Export to Excel (.xlsx)", command=on_export_excel, bg="#15803d", fg="white", font=("Segoe UI", 9, "bold"), padx=10, relief=tk.FLAT)
     btn_excel.pack(side=tk.LEFT, padx=6)
 
+    chk_dhab = tk.Checkbutton(
+        ctrl_frame, text="Invert DHAB (±)", variable=var_inv_dhab, command=recompute_active_df,
+        bg="#1e293b", fg="#4ade80", selectcolor="#0f172a", activebackground="#1e293b", activeforeground="#4ade80",
+        font=("Segoe UI", 9, "bold")
+    )
+    chk_dhab.pack(side=tk.LEFT, padx=8)
+
+    chk_ho = tk.Checkbutton(
+        ctrl_frame, text="Invert HO-100 (±)", variable=var_inv_ho100, command=recompute_active_df,
+        bg="#1e293b", fg="#f87171", selectcolor="#0f172a", activebackground="#1e293b", activeforeground="#f87171",
+        font=("Segoe UI", 9, "bold")
+    )
+    chk_ho.pack(side=tk.LEFT, padx=4)
+
     if csv_path and os.path.exists(csv_path):
         load_file(csv_path)
 
@@ -738,6 +907,8 @@ if __name__ == "__main__":
     parser.add_argument("file", nargs="?", default=None, help="Path to CSV log file")
     parser.add_argument("--html", action="store_true", help="Generate HTML report and exit")
     parser.add_argument("--excel", action="store_true", help="Generate Excel report and exit")
+    parser.add_argument("--invert-dhab", action="store_true", help="Invert DHAB polarity")
+    parser.add_argument("--invert-ho100", action="store_true", help="Invert HO-100-S polarity")
     args = parser.parse_args()
 
     target_file = args.file
@@ -750,14 +921,14 @@ if __name__ == "__main__":
 
     if target_file and os.path.exists(target_file):
         if args.html:
-            df = load_log_file(target_file)
+            df = apply_polarity_inversion(load_log_file(target_file), args.invert_dhab, args.invert_ho100)
             out = export_html_report(df, target_file)
             print(f"Report ready: {out}")
             sys.exit(0)
         elif args.excel:
-            df = load_log_file(target_file)
+            df = apply_polarity_inversion(load_log_file(target_file), args.invert_dhab, args.invert_ho100)
             out = export_excel_report(df, target_file)
             print(f"Excel ready: {out}")
             sys.exit(0)
 
-    launch_gui_viewer(target_file)
+    launch_gui_viewer(target_file, invert_dhab=args.invert_dhab, invert_ho100=args.invert_ho100)

@@ -36,7 +36,10 @@ typedef struct {
 } ina228_data_t;
 
 esp_err_t ina228_init(void);
+esp_err_t ina228_probe_and_init_ch(uint8_t ch);
 bool ina228_is_ch_online(uint8_t ch);
+uint8_t ina228_get_addr(uint8_t ch);
+void ina228_i2c_scan(void);
 esp_err_t ina228_read_ch(uint8_t ch, ina228_data_t *data);
 esp_err_t ina228_read(ina228_data_t *data);
 esp_err_t ina228_reset_energy(uint8_t ch);

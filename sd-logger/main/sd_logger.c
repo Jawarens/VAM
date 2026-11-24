@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include <stdio.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
 
@@ -150,8 +151,8 @@ esp_err_t sd_logger_start_session(void) {
         return ESP_FAIL;
     }
 
-    // Write Multi-Channel CSV Header with Dual DHAB Ranges
-    const char *header = "Timestamp_ISO,Unix_ms,Sample_Idx,INA1_V,INA1_A,INA1_W,INA2_V,INA2_A,INA2_W,DHAB_Low_A,DHAB_High_A,DHAB_A,HO100_A,Total_Current_A,Total_Power_W,Batt_V,Batt_Pct\n";
+    // Write Multi-Channel CSV Header (semicolon-delimited for direct Excel column import)
+    const char *header = "Timestamp_ISO;Unix_ms;Sample_Idx;INA1_V;INA1_A;INA1_W;INA2_V;INA2_A;INA2_W;DHAB_Low_A;DHAB_High_A;DHAB_A;HO100_A;Total_Current_A;Total_Power_W;Batt_V;Batt_Pct\n";
     fwrite(header, 1, strlen(header), s_log_file);
     fflush(s_log_file);
     if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
@@ -213,7 +214,7 @@ static void sd_writer_task(void *pvParameters) {
         if (xQueueReceive(s_record_queue, &rec, pdMS_TO_TICKS(50)) == pdTRUE) {
             if (s_log_file && s_is_logging) {
                 int len = snprintf(line_buf, sizeof(line_buf),
-                                   "%s,%lld,%lu,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%u\n",
+                                   "%s;%lld;%lu;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.2f;%u\n",
                                    rec.timestamp_iso,
                                    (long long)rec.timestamp_unix_ms,
                                    (unsigned long)rec.sample_idx,
@@ -233,6 +234,13 @@ static void sd_writer_task(void *pvParameters) {
                                    rec.battery_pct);
 
                 if (len > 0) {
+                    // Use decimal comma in numeric fields (after Timestamp_ISO) for Swedish/EU Excel compatibility
+                    char *p = strchr(line_buf, ';');
+                    if (p) {
+                        for (; *p != '\0'; p++) {
+                            if (*p == '.') *p = ',';
+                        }
+                    }
                     if (s_chunk_offset + len >= CHUNK_BUFFER_SIZE) {
                         size_t written = 0;
                         if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
@@ -297,4 +305,79 @@ void sd_logger_diag(void) {
         sd_logger_init();
     }
     printf("SD_STATUS: %s\n", g_sys_state.sd_mounted ? "MOUNTED_OK" : "NOT_MOUNTED");
+}
+
+static bool is_safe_log_filename(const char *filename) {
+    if (!filename || filename[0] == '\0') return false;
+    if (strchr(filename, '/') || strchr(filename, '\\') || strstr(filename, "..")) {
+        return false;
+    }
+    return true;
+}
+
+esp_err_t sd_logger_delete_file(const char *filename) {
+    if (!is_safe_log_filename(filename)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!g_sys_state.sd_mounted) {
+        if (sd_logger_init() != ESP_OK) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    char path[300];
+    snprintf(path, sizeof(path), "/sdcard/logs/%s", filename);
+
+    if (s_is_logging && strcmp(path, g_sys_state.current_log_filename) == 0) {
+        ESP_LOGW(TAG, "Stopping active log session before deleting %s", filename);
+        sd_logger_stop_session();
+    }
+
+    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
+    int rc = unlink(path);
+    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+
+    if (rc == 0) {
+        ESP_LOGI(TAG, "Deleted log file: %s", path);
+        return ESP_OK;
+    }
+    ESP_LOGW(TAG, "Failed to delete log file: %s", path);
+    return ESP_FAIL;
+}
+
+int sd_logger_delete_all_files(void) {
+    if (!g_sys_state.sd_mounted) {
+        if (sd_logger_init() != ESP_OK) {
+            return -1;
+        }
+    }
+
+    if (s_is_logging) {
+        ESP_LOGW(TAG, "Stopping active log session before deleting all logs");
+        sd_logger_stop_session();
+    }
+
+    int deleted = 0;
+    if (g_spi_bus_mutex) xSemaphoreTake(g_spi_bus_mutex, portMAX_DELAY);
+    DIR *dir = opendir("/sdcard/logs");
+    if (!dir) {
+        if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+        return -1;
+    }
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        if (de->d_name[0] != '.' && strstr(de->d_name, ".csv") != NULL) {
+            char path[300];
+            snprintf(path, sizeof(path), "/sdcard/logs/%s", de->d_name);
+            if (unlink(path) == 0) {
+                deleted++;
+            }
+        }
+    }
+    closedir(dir);
+    if (g_spi_bus_mutex) xSemaphoreGive(g_spi_bus_mutex);
+
+    ESP_LOGI(TAG, "Deleted %d log file(s) from /sdcard/logs", deleted);
+    return deleted;
 }

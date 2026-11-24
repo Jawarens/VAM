@@ -107,7 +107,7 @@ esp_err_t ds3231_init(void) {
     struct tm ti;
     ret = ds3231_get_time(&ti);
     if (ret == ESP_OK) {
-        if (ti.tm_year < 126) { // Earlier than 2026 -> uninitialized / battery loss
+        if (ti.tm_year < 126 || ti.tm_year > 135) { // Earlier than 2026 or bogus future year -> uninitialized / corrupted RTC
             ESP_LOGW(TAG, "RTC date is prior to 2026 (%04d-%02d-%02d), syncing to build timestamp...",
                      ti.tm_year + 1900, ti.tm_mon + 1, ti.tm_mday);
             rtc_sync_from_build_time();

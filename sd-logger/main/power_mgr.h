@@ -12,6 +12,7 @@ typedef struct {
     uint8_t state_of_charge_pct;
     bool is_charging;
     bool is_critical_low;
+    bool battery_present;
 } battery_status_t;
 
 esp_err_t power_mgr_init(void);

@@ -17,6 +17,8 @@ esp_err_t sd_logger_stop_session(void);
 void sd_logger_diag(void);
 esp_err_t sd_logger_push_record(const telemetry_record_t *record);
 bool      sd_logger_is_ready(void);
+esp_err_t sd_logger_delete_file(const char *filename);
+int       sd_logger_delete_all_files(void);
 
 #ifdef __cplusplus
 }

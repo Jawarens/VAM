@@ -15,7 +15,7 @@ echo Activating ESP-IDF environment...
 call C:\esp\v6.1-beta1\esp-idf\export.bat >nul 2>&1
 
 echo Flashing firmware to %PORT%...
-python -m esptool --chip esp32s3 -p %PORT% -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-size 8MB --flash-freq 80m 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0x10000 build\sd-logger.bin
+python -m esptool --chip esp32s3 -p %PORT% -b 460800 --before default-reset --after hard-reset write-flash --flash-mode dio --flash-size 4MB --flash-freq 80m 0x0 build\bootloader\bootloader.bin 0x8000 build\partition_table\partition-table.bin 0x10000 build\sd-logger.bin
 
 if %ERRORLEVEL% equ 0 (
     echo.

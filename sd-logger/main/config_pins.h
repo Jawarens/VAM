@@ -27,7 +27,7 @@ extern SemaphoreHandle_t g_spi_bus_mutex;
 #define I2C_PORT_NUM            I2C_NUM_0
 #define PIN_I2C_SDA             3
 #define PIN_I2C_SCL             4
-#define I2C_FREQ_HZ             400000
+#define I2C_FREQ_HZ             100000 // 100 kHz Standard Mode for reliable ISO1540 isolator timing
 
 // SPI Display Pins (GC9A01 1.28" Round LCD)
 #define PIN_LCD_MOSI            35
@@ -106,10 +106,14 @@ typedef struct {
     bool         sd_mounted;
     bool         ina1_online;
     bool         ina2_online;
+    uint8_t      ina1_addr;
+    uint8_t      ina2_addr;
     bool         low_battery_warning;
+    bool         battery_present;
     bool         is_charging;
     bool         screen_dimmed;
     bool         wifi_portal_active;
+    volatile bool usb_transfer_active;
     uint8_t      ui_screen; // 0: Overview, 1: Dual INA, 2: LEM Hall, 3: Wi-Fi Portal, 4: System Status
     uint32_t     records_written;
     uint32_t     queue_overflow_count;
@@ -124,11 +128,17 @@ typedef struct {
     float        dhab_ch2_zero_offset_a;
     float        ho100_zero_offset_a;
     int          zero_popup_timer; // Countdown for popup message (frames)
+
+    // LEM Polarity Inversion (for reversed sensor orientation)
+    bool         dhab_invert;
+    bool         ho100_invert;
+    int          invert_popup_timer;
     
     telemetry_record_t latest_telemetry;
 } system_state_t;
 
 extern system_state_t g_sys_state;
+void system_set_lem_invert(bool dhab_inv, bool ho100_inv);
 
 #ifdef __cplusplus
 }

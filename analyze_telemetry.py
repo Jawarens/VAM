@@ -6,12 +6,21 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.chart import LineChart, Reference
 
+def _read_csv_auto(csv_path):
+    with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
+        sample = [f.readline() for _ in range(5)]
+    header = sample[0] if sample else ""
+    sep = ";" if header.count(";") >= header.count(",") else ","
+    decimal = "," if (sep == ";" and any("," in ln.split(";")[1] for ln in sample[1:] if ";" in ln)) else "."
+    try:
+        return pd.read_csv(csv_path, sep=sep, decimal=decimal, on_bad_lines="skip", low_memory=False)
+    except TypeError:
+        return pd.read_csv(csv_path, sep=sep, decimal=decimal, error_bad_lines=False, warn_bad_lines=False, low_memory=False)
+
+
 def analyze_telemetry(csv_path, output_excel, threshold_a=5.0):
     print(f"[*] Loading Multi-Channel CSV telemetry: {csv_path}")
-    try:
-        df = pd.read_csv(csv_path, on_bad_lines="skip")
-    except TypeError:
-        df = pd.read_csv(csv_path, error_bad_lines=False, warn_bad_lines=False)
+    df = _read_csv_auto(csv_path)
 
     total_samples = len(df)
     start_time = df['Timestamp_ISO'].iloc[0] if 'Timestamp_ISO' in df else "N/A"
