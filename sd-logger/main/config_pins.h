@@ -29,7 +29,16 @@ extern SemaphoreHandle_t g_spi_bus_mutex;
 #define PIN_I2C_SCL             4
 #define I2C_FREQ_HZ             100000 // 100 kHz Standard Mode for reliable ISO1540 isolator timing
 
-// SPI Display Pins (GC9A01 1.28" Round LCD)
+// Display Selection: 1 = 12864B V2.0 (ST7920 128x64), 0 = GC9A01 240x240 Round
+#define USE_DISPLAY_ST7920      1
+
+// Dedicated SPI3 Display Pins for 12864B V2.0 (ST7920, PSB=GND Serial Mode)
+#define PIN_ST7920_CS           12 // Pin 12 -> 12864B Pin 4 (RS/CS, Active HIGH)
+#define PIN_ST7920_SID          9  // Pin 9  -> 12864B Pin 5 (R/W / SID / Data)
+#define PIN_ST7920_CLK          11 // Pin 11 -> 12864B Pin 6 (E / CLK / Clock)
+#define PIN_ST7920_BL           14 // Pin A4 -> Backlight control (optional)
+
+// SPI Display Pins (GC9A01 1.28" Round LCD, used when USE_DISPLAY_ST7920 == 0)
 #define PIN_LCD_MOSI            35
 #define PIN_LCD_SCLK            36
 #define PIN_LCD_CS              12

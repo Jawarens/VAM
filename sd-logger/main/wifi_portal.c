@@ -91,6 +91,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
       "<table><tr><th>Filename</th><th>Size</th><th>Actions</th></tr>",
       g_sys_state.latest_telemetry.total_system_current_a,
       g_sys_state.latest_telemetry.total_power_w,
+      batt_str,
       g_sys_state.is_logging ? "#f87171" : "#4ade80",
       g_sys_state.is_logging ? "RECORDING" : "STANDBY",
       g_sys_state.dhab_invert ? "#d97706" : "#334155",

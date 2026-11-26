@@ -4,6 +4,8 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -80,6 +82,20 @@ esp_err_t sd_logger_init(void) {
     };
     gpio_config(&cs_pre);
     gpio_set_level(PIN_SD_CS, 1);
+
+    // Ensure SPI2_HOST is initialized even when GC9A01 (SPI2) is disabled (e.g. ST7920 on SPI3)
+    spi_bus_config_t sd_bus_cfg = {
+        .mosi_io_num = PIN_SD_MOSI,
+        .miso_io_num = PIN_SD_MISO,
+        .sclk_io_num = PIN_SD_SCLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 16384,
+    };
+    esp_err_t bus_ret = spi_bus_initialize(SPI2_HOST, &sd_bus_cfg, SPI_DMA_CH_AUTO);
+    if (bus_ret != ESP_OK && bus_ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "spi_bus_initialize(SPI2_HOST) returned %s", esp_err_to_name(bus_ret));
+    }
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SPI2_HOST;

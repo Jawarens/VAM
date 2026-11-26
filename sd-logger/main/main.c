@@ -1,6 +1,18 @@
 #include "clamp_sensor.h"
 #include "config_pins.h"
+#if USE_DISPLAY_ST7920
+#include "display_st7920.h"
+#define DISPLAY_INIT()               display_st7920_init()
+#define DISPLAY_BOOT_LOGO(ms)        display_st7920_show_boot_logo(ms)
+#define DISPLAY_SET_BRIGHTNESS(pct)  display_st7920_set_brightness(pct)
+#define DISPLAY_UPDATE(st)           display_st7920_update(st)
+#else
 #include "display_gc9a01.h"
+#define DISPLAY_INIT()               display_gc9a01_init()
+#define DISPLAY_BOOT_LOGO(ms)        display_gc9a01_show_boot_logo(ms)
+#define DISPLAY_SET_BRIGHTNESS(pct)  display_gc9a01_set_brightness(pct)
+#define DISPLAY_UPDATE(st)           display_gc9a01_update(st)
+#endif
 #include "ds3231.h"
 #include "ina228.h"
 #include "power_mgr.h"
@@ -124,8 +136,19 @@ void app_main(void) {
 
   g_spi_bus_mutex = xSemaphoreCreateMutex();
 
-  // -1. Immediately pull both SD CS (GPIO 10) and LCD CS (GPIO 12) HIGH to
-  // isolate shared SPI bus!
+  // -1. Immediately put SD CS HIGH (and display CS in inactive state)!
+#if USE_DISPLAY_ST7920
+  gpio_config_t cs_init_cfg = {
+      .pin_bit_mask = (1ULL << PIN_SD_CS) | (1ULL << PIN_ST7920_CS),
+      .mode = GPIO_MODE_OUTPUT,
+      .pull_up_en = GPIO_PULLUP_ENABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+  };
+  gpio_config(&cs_init_cfg);
+  gpio_set_level(PIN_SD_CS, 1);
+  gpio_set_level(PIN_ST7920_CS, 0); // ST7920 CS is active HIGH
+#else
   gpio_config_t cs_init_cfg = {
       .pin_bit_mask = (1ULL << PIN_SD_CS) | (1ULL << PIN_LCD_CS),
       .mode = GPIO_MODE_OUTPUT,
@@ -136,6 +159,7 @@ void app_main(void) {
   gpio_config(&cs_init_cfg);
   gpio_set_level(PIN_SD_CS, 1);
   gpio_set_level(PIN_LCD_CS, 1);
+#endif
 
   // 0. Enable Power to STEMMA QT / I2C Connector (GPIO 7) & NeoPixel Power
   // (GPIO 21)
@@ -155,8 +179,8 @@ void app_main(void) {
   status_led_init();
 
   // 1. Initialize Display first & Show Wallhamn Boot Logo for 3.5 seconds
-  display_gc9a01_init();
-  display_gc9a01_show_boot_logo(3500);
+  DISPLAY_INIT();
+  DISPLAY_BOOT_LOGO(3500);
 
   // 2. Initialize MicroSD Storage Bus (Adalogger CS: Pin 10)
   sd_logger_init();
@@ -421,20 +445,22 @@ static TickType_t s_last_activity_tick = 0;
 static void gui_task(void *pvParameters) {
   s_last_activity_tick = xTaskGetTickCount();
   while (1) {
+#if !USE_DISPLAY_ST7920
     if (g_sys_state.usb_transfer_active) {
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
+#endif
     TickType_t now = xTaskGetTickCount();
     bool should_dim = (now - s_last_activity_tick) >
                       pdMS_TO_TICKS(120000); // 2 minutes timeout
     if (should_dim != g_sys_state.screen_dimmed) {
       g_sys_state.screen_dimmed = should_dim;
-      display_gc9a01_set_brightness(should_dim ? 0 : 100);
+      DISPLAY_SET_BRIGHTNESS(should_dim ? 0 : 100);
     }
 
     if (!g_sys_state.screen_dimmed) {
-      display_gc9a01_update(&g_sys_state);
+      DISPLAY_UPDATE(&g_sys_state);
       vTaskDelay(pdMS_TO_TICKS(500));
     } else {
       vTaskDelay(pdMS_TO_TICKS(1000));
@@ -461,7 +487,7 @@ static void button_task(void *pvParameters) {
       s_last_activity_tick = xTaskGetTickCount();
       if (g_sys_state.screen_dimmed) {
         g_sys_state.screen_dimmed = false;
-        display_gc9a01_set_brightness(100);
+        DISPLAY_SET_BRIGHTNESS(100);
         vTaskDelay(pdMS_TO_TICKS(300));
         last_left = left;
         last_menu = menu;

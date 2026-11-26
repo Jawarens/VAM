@@ -45,13 +45,14 @@ The system is organized into modular plug-and-play buses and dedicated interface
 | **GPIO 7** | Pin 7 | `STEMMA_PWR` | Onboard P-MOSFET | 3.3V Digital Out | Drives gate to energize STEMMA QT bus rail |
 | **GPIO 3** | SDA | `I2C_SDA` | INA1, INA2, DS3231 | 3.3V Open-Drain | 400 kHz Fast-Mode I2C Data line |
 | **GPIO 4** | SCL | `I2C_SCL` | INA1, INA2, DS3231 | 3.3V Open-Drain | 400 kHz Fast-Mode I2C Clock line |
-| **GPIO 35**| MOSI | `SPI_MOSI` | GC9A01 LCD, MicroSD | 3.3V Master Out | Shared SPI Master Out (Display DIN & SD DI) |
-| **GPIO 36**| SCK | `SPI_SCLK` | GC9A01 LCD, MicroSD | 3.3V Clock | Shared SPI Master Clock (Display CLK & SD CLK) |
-| **GPIO 37**| MISO | `SPI_MISO` | MicroSD Breakout | 3.3V Master In | MicroSD Data Out (`DO`) |
-| **GPIO 12**| Pin 12 | `LCD_CS` | GC9A01 Round Display | 3.3V Digital Out | Dedicated Display Chip Select (Active Low) |
-| **GPIO 9** | Pin 9 | `LCD_DC` | GC9A01 Round Display | 3.3V Digital Out | Display Command (0) / Data (1) Select |
-| **GPIO 14**| Pin 14 | `LCD_BL` | GC9A01 Round Display | 3.3V LEDC PWM | Hardware Backlight Dimming |
-| **GPIO 11**| Pin 11 | `SD_CS` | MicroSD Breakout | 3.3V Digital Out | Dedicated MicroSD Chip Select (Active Low) |
+| **GPIO 35**| MOSI | `SPI2_MOSI` | MicroSD (and GC9A01 if enabled) | 3.3V Master Out | SPI2 Master Out (SD DI) |
+| **GPIO 36**| SCK | `SPI2_SCLK` | MicroSD (and GC9A01 if enabled) | 3.3V Clock | SPI2 Master Clock (SD CLK) |
+| **GPIO 37**| MISO | `SPI2_MISO` | MicroSD Breakout | 3.3V Master In | MicroSD Data Out (`DO`) |
+| **GPIO 10**| Pin 10 | `SD_CS` | Adalogger MicroSD | 3.3V Digital Out | Dedicated MicroSD Chip Select (Active Low) |
+| **GPIO 12**| Pin 12 | `ST7920_CS` / `LCD_CS` | 12864B V2.0 Pin 4 (`RS/CS`) *(or GC9A01 `CS`)* | 3.3V Digital Out | Display Chip Select (12864B: Active HIGH) |
+| **GPIO 9** | Pin 9 | `ST7920_SID` / `LCD_DC` | 12864B V2.0 Pin 5 (`R/W / SID`) *(or GC9A01 `DC`)* | 3.3V Digital Out | Dedicated SPI3 Data (`MOSI`) for 12864B |
+| **GPIO 11**| Pin 11 | `ST7920_CLK` | 12864B V2.0 Pin 6 (`E / CLK`) | 3.3V Digital Out | Dedicated SPI3 Clock (`SCLK`) for 12864B |
+| **GPIO 14**| Pin A4 | `LCD_BL` | Display Backlight Control | 3.3V Digital Out | Backlight enable (high = ON, low = dimmed) |
 | **GPIO 5** | Pin 5 | `ADC1_CH4` | LEM DHAB S/157 Ch 1 | 0.33V – 3.0V Scaled | High-Sensitivity Current Channel (±50A) |
 | **GPIO 6** | Pin 6 | `ADC1_CH5` | LEM DHAB S/157 Ch 2 | 0.33V – 3.0V Scaled | High-Current Channel (±500A) |
 | **GPIO 8** | A5 | `ADC1_CH7` | LEM HO-100-S Clamp | 0.33V – 3.0V Scaled | Auxiliary Clamp Current Sensor (±100A) |
@@ -79,15 +80,31 @@ STEMMA QT uses standard 4-pin JST-SH 1.0mm cables with standardized wire colors:
 3. **Connect INA228 #2 to DS3231 RTC**:
    - Plug Cable 3 from INA228 #2 `Port OUT` &rarr; DS3231 RTC `Port IN` (or wire VCC, GND, SDA, SCL).
 
-### Phase 2: Shared SPI Display & MicroSD Card
-The GC9A01 LCD and MicroSD card share high-speed data lines while maintaining independent Chip Selects:
+### Phase 2: Display & MicroSD Card
+
+#### Option A (Default, `USE_DISPLAY_ST7920 = 1`): 12864B V2.0 (ST7920 128×64, Dedicated SPI3)
+MicroSD runs alone on `SPI2` (`MO/SCK/MI` + `Pin 10 CS`) while the **12864B V2.0** uses its own dedicated `SPI3` bus (zero bus contention):
+
+| 12864B V2.0 Pin | Symbol | Connect To | Notes |
+| :--- | :--- | :--- | :--- |
+| **1** | `VSS` | `GND` | Common ground |
+| **2** | `VDD` | `5V` *(Step-Up)* or `3.3V` | Check module label (`5V` typical; `3.3V` if 3.3V variant) |
+| **3** | `V0` | Contrast Trimpot (10kΩ) | Wiper to `V0`, ends to `VOUT` (Pin 18) & `GND` (if not onboard) |
+| **4** | `RS / CS` | Feather **Pin 12** (`GPIO 12`) | Chip Select (Active HIGH) |
+| **5** | `R/W / SID` | Feather **Pin 9** (`GPIO 9`) | SPI3 Serial Data (`SID`) |
+| **6** | `E / CLK` | Feather **Pin 11** (`GPIO 11`) | SPI3 Clock (`CLK`) |
+| **15** | `PSB` | **`GND`** | **Required** to select SPI/Serial mode |
+| **19** | `BLA` | `5V` (via 220Ω if needed) | Backlight (+) *(or switched via transistor from **A4 / GPIO 14**)* |
+| **20** | `BLK` | `GND` | Backlight (-) |
+
+#### Option B (`USE_DISPLAY_ST7920 = 0`): GC9A01 1.28" Round LCD + MicroSD (Shared SPI2)
 1. Connect `MOSI (GPIO 35)` to GC9A01 `SDA/DIN` AND MicroSD `DI`.
 2. Connect `SCK (GPIO 36)` to GC9A01 `SCL/CLK` AND MicroSD `CLK`.
 3. Connect dedicated control lines:
    - Feather `GPIO 12` &rarr; GC9A01 `CS`
    - Feather `GPIO 9` &rarr; GC9A01 `DC`
    - Feather `GPIO 14` &rarr; GC9A01 `BL`
-   - Feather `GPIO 11` &rarr; MicroSD `CS`
+   - Feather `GPIO 10` &rarr; MicroSD `CS`
    - Feather `GPIO 37` &rarr; MicroSD `DO / MISO`
 
 ### Phase 3: LEM 5V Transducers & Voltage Dividers
